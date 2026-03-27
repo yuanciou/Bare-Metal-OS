@@ -1,13 +1,20 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/-oo4r1dh)
+# Abstract
+This floder contain the **BOOTLOADER** of the kernel.
+The bootloader is also such a kernel, but it has the `load` command.
+When we write the bootloader on the board, we can use the `load` command to load the new kernel on the board.
 
-# UART Bootloader
+# Setup
 - On Orange Pi
   Use `ls /dev/` find the `ttyUSB*` device (now we find `/dev/ttyUSB0`), then run:
   ```shell
   make orangepi
-  sudo python3 send_kernel.py /dev/ttyUSB0 kernel.bin
   ```
-
+  Then, write the `kernel.fit` to the board.
+  - To load the new kernel through bootloader
+    ```
+    cd ..
+    sudo python3 send_kernel.py /dev/ttyUSB0 kernel.bin
+    ```
 - On QEMU
   ```shell
   make qemu
@@ -25,25 +32,20 @@
 # File Structure
 ```
 .
-├── lib
-│   ├── cpio.c
-│   ├── cpio.h
-│   ├── fdt.c
-│   ├── fdt.h
-│   ├── sbi.c
-│   ├── sbi.h
-│   ├── stdio.c
-│   ├── stdio.h
-│   ├── string.c
-│   └── string.h
+├── src/
+│   ├── config.h      // the macro diefine of different platform
+│   ├── link.ld       // define the self relocated addr
+│   ├── kernel.its
+│   ├── start.S       // handle the bootloader self relocation
+│   └── uart.c
 ├── initramfs.cpio
-├── kernel.its
-├── link.ld             // the self relocate addr
 │── main.c              // add the load command
 ├── Makefile
 ├── README.md
-├── send_kernel.py
-├── start.S             // handle bootloader self relocation
-├── uart.c
 └── x1_orangepi-rv2.dtb
 ```
+
+# Tips
+- The `main.c`, `config.h`, `link.ld`, `start.S`, `Makefile` is different form the new kernel. When there is a new feature
+need to add on the bootloader, it should be carefully modify.
+- The library is depand on the `../lib` folder
