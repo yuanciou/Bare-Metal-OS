@@ -1,7 +1,5 @@
-*.dtb
 *.dts
 *.o
 *.elf
 *.bin
 *.fit
-*.cpio

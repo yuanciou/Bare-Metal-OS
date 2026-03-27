@@ -5,7 +5,7 @@
     images {
         kernel {
             description = "Kernel Image";
-            data = /incbin/("kernel.bin");
+            data = /incbin/("../kernel.bin");
             type = "kernel";
             arch = "riscv";
             os = "linux";
@@ -15,7 +15,7 @@
         };
         fdt {
             description = "Flat Device Tree";
-            data = /incbin/("x1_orangepi-rv2.dtb");
+            data = /incbin/("../x1_orangepi-rv2.dtb");
             type = "flat_dt";
             arch = "riscv";
             compression = "none";
@@ -23,7 +23,7 @@
         };
         ramdisk {
             description = "Initial Ramdisk";
-            data = /incbin/("initramfs.cpio");
+            data = /incbin/("../initramfs.cpio");
             type = "ramdisk";
             arch = "riscv";
             os = "linux";

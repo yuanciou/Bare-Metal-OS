@@ -3,20 +3,12 @@
 #include "lib/cpio.h"
 #include "lib/stdio.h"
 #include "lib/fdt.h"
-
-extern unsigned long uart_base_addr;
+#include "config.h"
 
 extern char uart_getc(void);
 extern char uart_getc_raw(void);
 extern void uart_putc(char c);
 extern void uart_hex(unsigned long h);
-
-// define the address to avoid bootloader overwrite itself
-#ifdef ORANGE_PI
-#define KERNEL_LOAD_ADDR 0x00200000
-#else
-#define KERNEL_LOAD_ADDR 0x80200000
-#endif
 
 void load_kernel(unsigned long hartid, const void *fdt) {
     printf("Waiting for kernel...\r\n");

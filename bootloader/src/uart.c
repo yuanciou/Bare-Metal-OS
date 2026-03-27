@@ -1,20 +1,8 @@
-#ifdef ORANGE_PI
-// Orange Pi
+#include "config.h"
+
 unsigned long uart_base_addr = 0;
-#define UART_RBR  (volatile unsigned int*)(uart_base_addr + 0x0)
-#define UART_THR  (volatile unsigned int*)(uart_base_addr + 0x0)
-#define UART_LSR  (volatile unsigned int*)(uart_base_addr + 0x14)
-#define LSR_DR    (1 << 0)
-#define LSR_TDRQ  (1 << 5)
-#else
-// QEMU virt UART0 (16550A) addr
-unsigned long uart_base_addr = 0;
-#define UART_RBR  (volatile unsigned char*)(uart_base_addr + 0x0)
-#define UART_THR  (volatile unsigned char*)(uart_base_addr + 0x0)
-#define UART_LSR  (volatile unsigned char*)(uart_base_addr + 0x5)
-#define LSR_DR    (1 << 0)
-#define LSR_TDRQ  (1 << 5)
-#endif
+
+// the base and bit macro definition are in config.h
 
 char uart_getc() {
     while ((*UART_LSR & LSR_DR) == 0)

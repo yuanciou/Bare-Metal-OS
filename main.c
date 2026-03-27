@@ -3,8 +3,7 @@
 #include "lib/cpio.h"
 #include "lib/stdio.h"
 #include "lib/fdt.h"
-
-extern unsigned long uart_base_addr;
+#include "config.h"
 
 extern char uart_getc(void);
 extern char uart_getc_raw(void);
