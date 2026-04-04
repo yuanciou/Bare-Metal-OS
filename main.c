@@ -4,11 +4,32 @@
 #include "lib/stdio.h"
 #include "lib/fdt.h"
 #include "config.h"
+#include "buddy.h"
 
 extern char uart_getc(void);
 extern char uart_getc_raw(void);
 extern void uart_putc(char c);
 extern void uart_hex(unsigned long h);
+
+static void buddy_demo_case(void) {
+    void *p1;
+    void *p2;
+    void *p3;
+
+    printf("[Demo] buddy alloc/free start\r\n");
+    p1 = allocate(4000);
+    p2 = allocate(8000);
+    p3 = allocate(4000);
+
+    buddy_dump_free_areas();
+
+    free(p1);
+    free(p2);
+    free(p3);
+
+    buddy_dump_free_areas();
+    printf("[Demo] buddy alloc/free end\r\n");
+}
 
 void run_shell(unsigned long hartid, const void *fdt) {
     char buffer[256];
@@ -42,6 +63,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
             printf("  info - print system info.\r\n");
             printf("  ls - list files in initramfs.\r\n");
             printf("  cat [file] - print file content in initramfs.\r\n");
+            printf("  buddy - run buddy allocator demo case.\r\n");
         } else if (strcmp(buffer, "hello") == 0) {
             printf("Hello world.\r\n");
         } else if (strcmp(buffer, "info") == 0) {
@@ -71,6 +93,8 @@ void run_shell(unsigned long hartid, const void *fdt) {
             } else {
                 printf("Usage: cat [file]\r\n");
             }
+        } else if (strcmp(buffer, "buddy") == 0) {
+            buddy_demo_case();
         } else {
             printf("Unknown command: ");
             printf(buffer);
@@ -82,6 +106,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
 void start_kernel(unsigned long hartid, const void *fdt) {
     init_uart_from_fdt(fdt);
     printf("Hello from Main Kernel!\r\n");
+    buddy_init();
     
     run_shell(hartid, fdt);
 }

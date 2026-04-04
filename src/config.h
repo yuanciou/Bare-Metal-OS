@@ -4,11 +4,23 @@
 // The base address of the UART interface
 extern unsigned long uart_base_addr;
 
+// 1: print the buddy log; 0: disable the buddylog
+#define BUDDY_ENABLE_DEMO_LOG 1
+
+// Buddy allocator config (Basic Exercise 1)
+#define BUDDY_MAX_ORDER 10
+#define BUDDY_MAX_ALLOC_SIZE (1UL << 30)
+
+// ----------------------------------------------------------------------
 #ifdef ORANGE_PI
 // Orange Pi
 
 // define the address to avoid bootloader overwrite itself
 #define KERNEL_LOAD_ADDR 0x00200000
+
+// Hardcoded allocable region for Basic Exercise 1
+#define BUDDY_POOL_START 0x10000000UL
+#define BUDDY_POOL_SIZE  (16UL * 1024UL * 1024UL)
 
 // Orange Pi UART
 #define UART_RBR  (volatile unsigned int*)(uart_base_addr + 0x0)
@@ -24,6 +36,10 @@ extern unsigned long uart_base_addr;
 // define the address to avoid bootloader overwrite itself
 #define KERNEL_LOAD_ADDR 0x80200000
 
+// Hardcoded allocable region for Basic Exercise 1
+#define BUDDY_POOL_START 0x81000000UL
+#define BUDDY_POOL_SIZE  (16UL * 1024UL * 1024UL)
+
 // QEMU virt UART0 (16550A) addr
 #define UART_RBR  (volatile unsigned char*)(uart_base_addr + 0x0)
 #define UART_THR  (volatile unsigned char*)(uart_base_addr + 0x0)
@@ -32,5 +48,7 @@ extern unsigned long uart_base_addr;
 #define LSR_TDRQ  (1 << 5)
 
 #endif
+
+#define BUDDY_TOTAL_PAGES (BUDDY_POOL_SIZE >> 12)
 
 #endif // CONFIG_H

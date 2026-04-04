@@ -3,3 +3,4 @@
 *.elf
 *.bin
 *.fit
+buddy_example.cpp
