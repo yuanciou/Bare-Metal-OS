@@ -26,7 +26,28 @@ struct frame {
 
 static struct frame frame_array[BUDDY_TOTAL_PAGES];
 static struct list_head free_area[BUDDY_MAX_ORDER + 1];
+static unsigned char reserved_map[BUDDY_TOTAL_PAGES];
+static unsigned int reserved_prefix[BUDDY_TOTAL_PAGES + 1];
+static unsigned long g_pool_start = BUDDY_DEFAULT_POOL_START;
+static unsigned long g_pool_size = BUDDY_DEFAULT_POOL_SIZE;
+static unsigned long g_total_pages = BUDDY_DEFAULT_POOL_SIZE >> PAGE_SHIFT;
 static int buddy_ready;
+
+static unsigned long align_down(unsigned long value) {
+    return value & ~(PAGE_SIZE - 1UL);
+}
+
+static unsigned long align_up(unsigned long value) {
+    return (value + PAGE_SIZE - 1UL) & ~(PAGE_SIZE - 1UL);
+}
+
+static unsigned long page_to_addr(unsigned long idx) {
+    return g_pool_start + (idx << PAGE_SHIFT);
+}
+
+static int range_has_reserved(unsigned long idx, unsigned long count) {
+    return reserved_prefix[idx + count] != reserved_prefix[idx];
+}
 
 static void mark_block(unsigned long idx, unsigned int order, int head_state, int tail_state) {
     unsigned long count = 1UL << order;
@@ -56,6 +77,79 @@ static void remove_free_block(unsigned long idx, unsigned int order) {
               idx, order, idx, idx + (1UL << order) - 1);
 }
 
+static void build_reserved_prefix(void) {
+    unsigned long i;
+
+    reserved_prefix[0] = 0;
+    for (i = 0; i < g_total_pages; ++i) {
+        reserved_prefix[i + 1] = reserved_prefix[i] + (reserved_map[i] ? 1U : 0U);
+    }
+}
+
+void buddy_set_region(unsigned long start, unsigned long size) {
+    unsigned long i;
+
+    if (size == 0) {
+        g_pool_start = BUDDY_DEFAULT_POOL_START;
+        g_pool_size = BUDDY_DEFAULT_POOL_SIZE;
+    } else {
+        g_pool_start = align_down(start);
+        g_pool_size = align_down(size);
+        if (g_pool_size > BUDDY_MAX_POOL_SIZE) {
+            g_pool_size = BUDDY_MAX_POOL_SIZE;
+        }
+    }
+
+    if (g_pool_size < PAGE_SIZE) {
+        g_pool_size = BUDDY_DEFAULT_POOL_SIZE;
+        g_pool_start = BUDDY_DEFAULT_POOL_START;
+    }
+
+    g_total_pages = g_pool_size >> PAGE_SHIFT;
+    if (g_total_pages > BUDDY_TOTAL_PAGES) {
+        g_total_pages = BUDDY_TOTAL_PAGES;
+    }
+
+    for (i = 0; i < BUDDY_TOTAL_PAGES; ++i) {
+        reserved_map[i] = 0;
+    }
+}
+
+void buddy_mark_reserved_range(unsigned long start, unsigned long size) {
+    unsigned long region_end;
+    unsigned long reserve_end;
+    unsigned long page_start;
+    unsigned long page_end;
+    unsigned long i;
+
+    if (size == 0 || g_total_pages == 0) {
+        return;
+    }
+
+    region_end = g_pool_start + g_pool_size;
+    reserve_end = start + size;
+    if (reserve_end <= g_pool_start || start >= region_end) {
+        return;
+    }
+
+    if (start < g_pool_start) {
+        start = g_pool_start;
+    }
+    if (reserve_end > region_end) {
+        reserve_end = region_end;
+    }
+
+    page_start = (start - g_pool_start) >> PAGE_SHIFT;
+    page_end = align_up(reserve_end - g_pool_start) >> PAGE_SHIFT;
+    if (page_end > g_total_pages) {
+        page_end = g_total_pages;
+    }
+
+    for (i = page_start; i < page_end; ++i) {
+        reserved_map[i] = 1;
+    }
+}
+
 void buddy_init(void) {
     unsigned long idx = 0;
     unsigned long i;
@@ -70,11 +164,21 @@ void buddy_init(void) {
         INIT_LIST_HEAD(&free_area[i]);
     }
 
-    while (idx < BUDDY_TOTAL_PAGES) {
+    build_reserved_prefix();
+
+    while (idx < g_total_pages) {
+        if (reserved_map[idx]) {
+            mark_block(idx, 0, FRAME_ALLOC_HEAD, FRAME_ALLOC_TAIL);
+            idx++;
+            continue;
+        }
+
         int order;
         for (order = BUDDY_MAX_ORDER; order >= 0; --order) {
             unsigned long block_pages = 1UL << order;
-            if ((idx & (block_pages - 1)) == 0 && idx + block_pages <= BUDDY_TOTAL_PAGES) {
+            if ((idx & (block_pages - 1)) == 0 &&
+                idx + block_pages <= g_total_pages &&
+                !range_has_reserved(idx, block_pages)) {
                 add_free_block(idx, (unsigned int)order);
                 idx += block_pages;
                 break;
@@ -84,9 +188,9 @@ void buddy_init(void) {
 
     buddy_ready = 1;
     BUDDY_LOG("[Init] Buddy initialized at [0x%lx, 0x%lx), total pages: %u\r\n",
-              (unsigned long)BUDDY_POOL_START,
-              (unsigned long)(BUDDY_POOL_START + BUDDY_POOL_SIZE),
-              (unsigned int)BUDDY_TOTAL_PAGES);
+              g_pool_start,
+              g_pool_start + g_pool_size,
+              (unsigned int)g_total_pages);
 }
 
 void *buddy_alloc_pages(unsigned int order) {
@@ -120,10 +224,10 @@ void *buddy_alloc_pages(unsigned int order) {
 
         mark_block(idx, order, FRAME_ALLOC_HEAD, FRAME_ALLOC_TAIL);
         BUDDY_LOG("[Page] Allocate 0x%lx at order %u, page %lu\r\n",
-                  (unsigned long)(BUDDY_POOL_START + (idx << PAGE_SHIFT)),
+                  page_to_addr(idx),
                   order,
                   idx);
-        return (void *)(BUDDY_POOL_START + (idx << PAGE_SHIFT));
+        return (void *)page_to_addr(idx);
     }
 
     return 0;
@@ -139,15 +243,15 @@ void buddy_free_pages(void *ptr) {
     }
 
     addr = (unsigned long)ptr;
-    if (addr < BUDDY_POOL_START || addr >= BUDDY_POOL_START + BUDDY_POOL_SIZE) {
+    if (addr < g_pool_start || addr >= g_pool_start + g_pool_size) {
         return;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0) {
         return;
     }
 
-    idx = (addr - BUDDY_POOL_START) >> PAGE_SHIFT;
-    if (idx >= BUDDY_TOTAL_PAGES || frame_array[idx].state != FRAME_ALLOC_HEAD) {
+    idx = (addr - g_pool_start) >> PAGE_SHIFT;
+    if (idx >= g_total_pages || frame_array[idx].state != FRAME_ALLOC_HEAD) {
         return;
     }
 
@@ -183,9 +287,21 @@ void buddy_free_pages(void *ptr) {
 
     add_free_block(idx, order);
     BUDDY_LOG("[Page] Free 0x%lx and add back to order %u, page %lu\r\n",
-              (unsigned long)(BUDDY_POOL_START + (idx << PAGE_SHIFT)),
+              page_to_addr(idx),
               order,
               idx);
+}
+
+unsigned long buddy_pool_start(void) {
+    return g_pool_start;
+}
+
+unsigned long buddy_pool_size(void) {
+    return g_pool_size;
+}
+
+unsigned long buddy_total_pages(void) {
+    return g_total_pages;
 }
 
 void buddy_dump_free_areas(void) {

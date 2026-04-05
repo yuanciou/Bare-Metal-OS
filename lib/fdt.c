@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
+#include "endian.h"
 #include "string.h"
 #include "fdt.h"
 
@@ -23,17 +24,6 @@ struct fdt_header {
     uint32_t size_dt_strings;
     uint32_t size_dt_struct;
 };
-
-static inline uint32_t bswap32(uint32_t x) {
-    return ((x & 0xff000000) >> 24) |
-           ((x & 0x00ff0000) >> 8) |
-           ((x & 0x0000ff00) << 8) |
-           ((x & 0x000000ff) << 24);
-}
-
-static inline uint64_t bswap64(uint64_t x) {
-    return ((uint64_t)bswap32(x & 0xFFFFFFFF) << 32) | bswap32(x >> 32);
-}
 
 static inline const void* align_up(const void* ptr, size_t align) {
     return (const void*)(((uintptr_t)ptr + align - 1) & ~(align - 1));
@@ -252,27 +242,291 @@ void init_uart_from_fdt(const void *fdt) {
     uart_base_addr = base;
 }
 
-unsigned long get_initrd_start(const void *fdt) {
-    unsigned long initrd_start = 0;
-    if (fdt) {
-        int chosen = fdt_path_offset(fdt, "/chosen");
-        if (chosen >= 0) {
-            int len = 0;
-            const void* prop = fdt_getprop(fdt, chosen, "linux,initrd-start", &len);
-            
-            // Try fallback name if standard one is missing
-            if (!prop) {
-                prop = fdt_getprop(fdt, chosen, "initrd-start", &len);
-            }
+unsigned long fdt_totalsize(const void *fdt) {
+    const struct fdt_header *header = (const struct fdt_header *)fdt;
 
-            if (prop) {
-                if (len == 4) { // QEMU
-                    initrd_start = bswap32(*(const uint32_t *)prop);
-                } else if (len == 8) { // Orange Pi
-                    initrd_start = bswap64(*(const uint64_t *)prop);
+    if (!fdt) {
+        return 0;
+    }
+    if (bswap32(header->magic) != 0xd00dfeed) {
+        return 0;
+    }
+
+    return (unsigned long)bswap32(header->totalsize);
+}
+
+static unsigned long parse_addr_prop(const void *prop, int len) {
+    if (!prop) {
+        return 0;
+    }
+    if (len == 4) {  // QEMU
+        return (unsigned long)bswap32(*(const uint32_t *)prop);
+    }
+    if (len == 8) {  // Orange Pi
+        return (unsigned long)bswap64(*(const uint64_t *)prop);
+    }
+
+    return 0;
+}
+
+static unsigned long get_chosen_addr_prop(const void *fdt,
+                                          const char *name,
+                                          const char *fallback_name) {
+    int chosen;
+    int len = 0;
+    const void *prop;
+
+    if (!fdt) {
+        return 0;
+    }
+
+    chosen = fdt_path_offset(fdt, "/chosen");
+    if (chosen < 0) {
+        return 0;
+    }
+
+    prop = fdt_getprop(fdt, chosen, name, &len);
+    if (!prop && fallback_name) {
+        prop = fdt_getprop(fdt, chosen, fallback_name, &len);
+    }
+
+    return parse_addr_prop(prop, len);
+}
+
+unsigned long get_initrd_start(const void *fdt) {
+    return get_chosen_addr_prop(fdt, "linux,initrd-start", "initrd-start");
+}
+
+unsigned long get_initrd_end(const void *fdt) {
+    return get_chosen_addr_prop(fdt, "linux,initrd-end", "initrd-end");
+}
+
+static void read_cells_from_node(const void *fdt,
+                                 int node_offset,
+                                 unsigned int *addr_cells,
+                                 unsigned int *size_cells) {
+    int len = 0;
+    const void *prop;
+
+    *addr_cells = 2;
+    *size_cells = 2;
+
+    prop = fdt_getprop(fdt, node_offset, "#address-cells", &len);
+    if (prop && len >= 4) {
+        *addr_cells = (unsigned int)bswap32(*(const uint32_t *)prop);
+    }
+
+    prop = fdt_getprop(fdt, node_offset, "#size-cells", &len);
+    if (prop && len >= 4) {
+        *size_cells = (unsigned int)bswap32(*(const uint32_t *)prop);
+    }
+}
+
+static int parse_first_reg_range(const void *reg_prop,
+                                 int len,
+                                 unsigned int addr_cells,
+                                 unsigned int size_cells,
+                                 unsigned long *start,
+                                 unsigned long *size) {
+    unsigned int tuple_bytes = (addr_cells + size_cells) * 4U;
+
+    if (!reg_prop || len <= 0) {
+        return -1;
+    }
+
+    if (tuple_bytes == 8U && len >= 8) {
+        *start = (unsigned long)bswap32(*(const uint32_t *)reg_prop);
+        *size = (unsigned long)bswap32(*((const uint32_t *)reg_prop + 1));
+        return 0;
+    }
+
+    if (tuple_bytes == 16U && len >= 16) {
+        *start = (unsigned long)bswap64(*(const uint64_t *)reg_prop);
+        *size = (unsigned long)bswap64(*((const uint64_t *)reg_prop + 1));
+        return 0;
+    }
+
+    if (len >= 16) {
+        *start = (unsigned long)bswap64(*(const uint64_t *)reg_prop);
+        *size = (unsigned long)bswap64(*((const uint64_t *)reg_prop + 1));
+        return 0;
+    }
+
+    if (len >= 8) {
+        *start = (unsigned long)bswap32(*(const uint32_t *)reg_prop);
+        *size = (unsigned long)bswap32(*((const uint32_t *)reg_prop + 1));
+        return 0;
+    }
+
+    return -1;
+}
+
+static int parse_size_value(const void *size_prop,
+                            int len,
+                            unsigned int size_cells,
+                            unsigned long *size) {
+    if (!size_prop || len <= 0 || !size) {
+        return -1;
+    }
+
+    if (size_cells == 1 && len >= 4) {
+        *size = (unsigned long)bswap32(*(const uint32_t *)size_prop);
+        return 0;
+    }
+
+    if (size_cells >= 2 && len >= 8) {
+        *size = (unsigned long)bswap64(*(const uint64_t *)size_prop);
+        return 0;
+    }
+
+    if (len >= 8) {
+        *size = (unsigned long)bswap64(*(const uint64_t *)size_prop);
+        return 0;
+    }
+
+    if (len >= 4) {
+        *size = (unsigned long)bswap32(*(const uint32_t *)size_prop);
+        return 0;
+    }
+
+    return -1;
+}
+
+static int parse_alloc_ranges_with_size(const void *alloc_ranges_prop,
+                                        int alloc_ranges_len,
+                                        const void *size_prop,
+                                        int size_len,
+                                        unsigned int addr_cells,
+                                        unsigned int size_cells,
+                                        unsigned long *start,
+                                        unsigned long *size) {
+    unsigned long range_size = 0;
+    unsigned long requested_size = 0;
+
+    if (parse_first_reg_range(alloc_ranges_prop,
+                              alloc_ranges_len,
+                              addr_cells,
+                              size_cells,
+                              start,
+                              &range_size) != 0) {
+        return -1;
+    }
+
+    if (parse_size_value(size_prop, size_len, size_cells, &requested_size) != 0) {
+        return -1;
+    }
+
+    if (requested_size == 0) {
+        return -1;
+    }
+
+    if (range_size != 0 && requested_size > range_size) {
+        requested_size = range_size;
+    }
+
+    *size = requested_size;
+    return 0;
+}
+
+int fdt_get_reserved_memory_region(const void *fdt,
+                                   int index,
+                                   unsigned long *start,
+                                   unsigned long *size) {
+    unsigned int addr_cells = 2;
+    unsigned int size_cells = 2;
+    int reserved_offset;
+    const char *struct_ptr;
+    int depth = 1;
+    int current = 0;
+    int len = 0;
+    const void *reg_prop;
+    const void *size_prop;
+    const void *alloc_ranges_prop;
+    int size_len = 0;
+    int alloc_ranges_len = 0;
+
+    if (!fdt || index < 0 || !start || !size) {
+        return -1;
+    }
+
+    reserved_offset = fdt_path_offset(fdt, "/reserved-memory");
+    if (reserved_offset < 0) {
+        return -1;
+    }
+
+    read_cells_from_node(fdt, reserved_offset, &addr_cells, &size_cells);
+
+    reg_prop = fdt_getprop(fdt, reserved_offset, "reg", &len);
+    if (parse_first_reg_range(reg_prop, len, addr_cells, size_cells, start, size) == 0) {
+        if (current == index) {
+            return 0;
+        }
+        current++;
+    }
+
+    struct_ptr = (const char *)fdt + reserved_offset;
+    if (bswap32(*(const uint32_t *)struct_ptr) != FDT_BEGIN_NODE) {
+        return -1;
+    }
+
+    struct_ptr += 4;
+    struct_ptr = align_up(struct_ptr + strlen(struct_ptr) + 1, 4);
+
+    while (depth > 0) {
+        const char *token_ptr = struct_ptr;
+        uint32_t token = bswap32(*(const uint32_t *)token_ptr);
+
+        struct_ptr += 4;
+
+        if (token == FDT_BEGIN_NODE) {
+            int child_offset = (int)(token_ptr - (const char *)fdt);
+            const char *child_name = struct_ptr;
+
+            struct_ptr = align_up(struct_ptr + strlen(child_name) + 1, 4);
+            depth++;
+
+            if (depth == 2) {
+                reg_prop = fdt_getprop(fdt, child_offset, "reg", &len);
+                if (parse_first_reg_range(reg_prop, len, addr_cells, size_cells, start, size) == 0) {
+                    if (current == index) {
+                        return 0;
+                    }
+                    current++;
+                    continue;
+                }
+
+                alloc_ranges_prop = fdt_getprop(fdt,
+                                                child_offset,
+                                                "alloc-ranges",
+                                                &alloc_ranges_len);
+                size_prop = fdt_getprop(fdt, child_offset, "size", &size_len);
+                if (parse_alloc_ranges_with_size(alloc_ranges_prop,
+                                                alloc_ranges_len,
+                                                size_prop,
+                                                size_len,
+                                                addr_cells,
+                                                size_cells,
+                                                start,
+                                                size) == 0) {
+                    if (current == index) {
+                        return 0;
+                    }
+                    current++;
                 }
             }
+        } else if (token == FDT_END_NODE) {
+            depth--;
+        } else if (token == FDT_PROP) {
+            uint32_t prop_len = bswap32(((const uint32_t *)struct_ptr)[0]);
+
+            struct_ptr += 8;
+            struct_ptr = align_up(struct_ptr + prop_len, 4);
+        } else if (token == FDT_NOP) {
+            continue;
+        } else if (token == FDT_END) {
+            break;
         }
     }
-    return initrd_start;
+
+    return -1;
 }

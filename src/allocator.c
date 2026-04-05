@@ -1,9 +1,17 @@
 #include "allocator.h"
 
+#include <stdint.h>
+
 #include "../lib/buddy.h"
+#include "../lib/endian.h"
+#include "../lib/fdt.h"
 #include "../lib/list.h"
 #include "../lib/stdio.h"
+#include "../lib/string.h"
 #include "config.h"
+
+extern char _start;
+extern char _end;
 
 #if BUDDY_ENABLE_DEMO_LOG
 #define ALLOC_LOG(...) printf(__VA_ARGS__)
@@ -38,7 +46,7 @@ static signed char g_page_meta_order[BUDDY_TOTAL_PAGES];
 static signed char g_page_meta_pool_idx[BUDDY_TOTAL_PAGES];
 static int g_allocator_ready;
 
-static unsigned int roundup_order(unsigned long pages) {
+static unsigned long roundup_order(unsigned long pages) {
     unsigned int order = 0;
     unsigned long n = 1;
 
@@ -49,16 +57,28 @@ static unsigned int roundup_order(unsigned long pages) {
     return order;
 }
 
+static unsigned long allocator_pool_start(void) {
+    return buddy_pool_start();
+}
+
+static unsigned long allocator_pool_size(void) {
+    return buddy_pool_size();
+}
+
 static int addr_in_pool(unsigned long addr) {
-    return addr >= BUDDY_POOL_START && addr < BUDDY_POOL_START + BUDDY_POOL_SIZE;
+    unsigned long start = allocator_pool_start();
+    unsigned long size = allocator_pool_size();
+
+    return size != 0 && addr >= start && addr < start + size;
 }
 
 static unsigned long addr_to_page_idx(unsigned long addr) {
-    return (addr - BUDDY_POOL_START) >> PAGE_SHIFT;
+    return (addr - allocator_pool_start()) >> PAGE_SHIFT;
 }
 
 static int find_pool_index(unsigned long size) {
     int i;
+
     for (i = 0; i < CHUNK_POOL_COUNT; ++i) {
         if (size <= g_pools[i].chunk_size) {
             return i;
@@ -128,8 +148,156 @@ static void clear_page_meta(unsigned long head_idx, unsigned int order) {
     }
 }
 
-void allocator_init(void) {
+static void read_cells_from_node(const void *fdt,
+                                 int node_offset,
+                                 unsigned int *addr_cells,
+                                 unsigned int *size_cells) {
+    int len = 0;
+    const void *prop;
+
+    *addr_cells = 2;
+    *size_cells = 2;
+
+    prop = fdt_getprop(fdt, node_offset, "#address-cells", &len);
+    if (prop && len >= 4) {
+        *addr_cells = (unsigned int)bswap32(*(const uint32_t *)prop);
+    }
+
+    prop = fdt_getprop(fdt, node_offset, "#size-cells", &len);
+    if (prop && len >= 4) {
+        *size_cells = (unsigned int)bswap32(*(const uint32_t *)prop);
+    }
+}
+
+static void reserve_dtb_blob(const void *fdt) {
+    unsigned long dtb_size;
+
+    if (!fdt) {
+        return;
+    }
+
+    dtb_size = fdt_totalsize(fdt);
+    if (dtb_size != 0) {
+        ALLOC_LOG("Reserve DTB:\r\n");
+        memory_reserve((unsigned long)fdt, dtb_size);
+        ALLOC_LOG("----------------------------\r\n");
+    }
+}
+
+static void reserve_kernel_image(void) {
+    ALLOC_LOG("Reserve kernel image:\r\n");
+    memory_reserve((unsigned long)&_start, (unsigned long)(&_end - &_start));
+    ALLOC_LOG("----------------------------\r\n");
+}
+
+static void reserve_initramfs(const void *fdt) {
+    unsigned long initrd_start;
+    unsigned long initrd_end;
+
+    if (!fdt) {
+        return;
+    }
+
+    initrd_start = get_initrd_start(fdt);
+    initrd_end = get_initrd_end(fdt);
+
+    if (initrd_start && initrd_end > initrd_start) {
+        ALLOC_LOG("Reserve initramfs:\r\n");
+        memory_reserve(initrd_start, initrd_end - initrd_start);
+        ALLOC_LOG("----------------------------\r\n");
+    }
+}
+
+static void reserve_reserved_memory_ranges(const void *fdt) {
+    int idx = 0;
+    unsigned long start;
+    unsigned long size;
+
+    while (fdt_get_reserved_memory_region(fdt, idx, &start, &size) == 0) {
+        ALLOC_LOG("Reserve reserved memory %d:\r\n", idx);
+        memory_reserve(start, size);
+        ALLOC_LOG("----------------------------\r\n");
+        idx++;
+    }
+}
+
+void memory_reserve(unsigned long start, unsigned long size) {
+    unsigned long end;
+    unsigned long pool_start;
+    unsigned long pool_end;
+    unsigned long reserve_start;
+    unsigned long reserve_end;
+
+    if (size == 0) {
+        return;
+    }
+
+    end = start + size;
+    pool_start = buddy_pool_start();
+    pool_end = pool_start + buddy_pool_size();
+
+    if (end <= pool_start || start >= pool_end) {
+        ALLOC_LOG("[Reserve] Skip address [0x%lx, 0x%lx): out of pool [0x%lx, 0x%lx)\r\n",
+                  start,
+                  end,
+                  pool_start,
+                  pool_end);
+        return;
+    }
+
+    reserve_start = start < pool_start ? pool_start : start;
+    reserve_end = end > pool_end ? pool_end : end;
+
+    ALLOC_LOG("[Reserve] Reserve address [0x%lx, 0x%lx). Range of pages: [%lu, %lu)\r\n",
+              reserve_start,
+              reserve_end,
+              (reserve_start - pool_start) >> PAGE_SHIFT,
+              (reserve_end - pool_start + PAGE_SIZE - 1UL) >> PAGE_SHIFT);
+    buddy_mark_reserved_range(reserve_start, reserve_end - reserve_start);
+}
+
+void allocator_init(const void *fdt) {
+    unsigned long pool_start = BUDDY_DEFAULT_POOL_START;
+    unsigned long pool_size = BUDDY_DEFAULT_POOL_SIZE;
     unsigned int i;
+
+    if (fdt) {
+        int memory_offset = fdt_path_offset(fdt, "/memory");
+
+        if (memory_offset >= 0) {
+            unsigned int addr_cells = 2;
+            unsigned int size_cells = 2;
+            int len = 0;
+            const void *prop;
+
+            read_cells_from_node(fdt, memory_offset, &addr_cells, &size_cells);
+            prop = fdt_getprop(fdt, memory_offset, "reg", &len);
+            if (prop) {
+                if (addr_cells == 1 && size_cells == 1 && len >= 8) {
+                    pool_start = (unsigned long)bswap32(*(const uint32_t *)prop);
+                    pool_size = (unsigned long)bswap32(*((const uint32_t *)prop + 1));
+                } else if (addr_cells >= 2 && size_cells >= 2 && len >= 16) {
+                    pool_start = (unsigned long)bswap64(*(const uint64_t *)prop);
+                    pool_size = (unsigned long)bswap64(*((const uint64_t *)prop + 1));
+                } else if (len >= 16) {
+                    pool_start = (unsigned long)bswap64(*(const uint64_t *)prop);
+                    pool_size = (unsigned long)bswap64(*((const uint64_t *)prop + 1));
+                } else if (len >= 8) {
+                    pool_start = (unsigned long)bswap32(*(const uint32_t *)prop);
+                    pool_size = (unsigned long)bswap32(*((const uint32_t *)prop + 1));
+                }
+            }
+        }
+    }
+
+    buddy_set_region(pool_start, pool_size);
+
+    reserve_kernel_image();
+    if (fdt) {
+        reserve_dtb_blob(fdt);
+        reserve_initramfs(fdt);
+        reserve_reserved_memory_ranges(fdt);
+    }
 
     buddy_init();
 

@@ -140,7 +140,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
 void start_kernel(unsigned long hartid, const void *fdt) {
     init_uart_from_fdt(fdt);
     printf("Hello from Main Kernel!\r\n");
-    allocator_init();
+    allocator_init(fdt);
     
     run_shell(hartid, fdt);
 }
