@@ -11,6 +11,11 @@ extern unsigned long uart_base_addr;
 #define BUDDY_MAX_ORDER 10
 #define BUDDY_MAX_ALLOC_SIZE (1UL << 30)
 
+// Dynamic allocator config (Basic Exercise 2)
+#define PAGE_SHIFT 12UL
+#define PAGE_SIZE (1UL << PAGE_SHIFT)
+#define SMALL_ALLOC_LIMIT 2048UL
+
 // ----------------------------------------------------------------------
 #ifdef ORANGE_PI
 // Orange Pi

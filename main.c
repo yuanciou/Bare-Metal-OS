@@ -4,7 +4,7 @@
 #include "lib/stdio.h"
 #include "lib/fdt.h"
 #include "config.h"
-#include "buddy.h"
+#include "allocator.h"
 
 extern char uart_getc(void);
 extern char uart_getc_raw(void);
@@ -21,14 +21,45 @@ static void buddy_demo_case(void) {
     p2 = allocate(8000);
     p3 = allocate(4000);
 
-    buddy_dump_free_areas();
+    allocator_dump_pages();
 
     free(p1);
     free(p2);
     free(p3);
 
-    buddy_dump_free_areas();
+    allocator_dump_pages();
     printf("[Demo] buddy alloc/free end\r\n");
+}
+
+static void dynamic_demo_case(void) {
+    void *ptr1;
+    void *ptr2;
+    void *ptr3;
+    void *ptr4;
+    void *big;
+    void *too_big;
+
+    printf("[Demo] dynamic allocator start\r\n");
+
+    ptr1 = allocate(16);
+    ptr2 = allocate(32);
+    ptr3 = allocate(64);
+    ptr4 = allocate(128);
+
+    free(ptr1);
+    free(ptr2);
+    free(ptr3);
+    free(ptr4);
+
+    big = allocate(8000);
+    free(big);
+
+    too_big = allocate(BUDDY_MAX_ALLOC_SIZE + 1);
+    if (!too_big) {
+        printf("Allocation failed as expected for size > MAX_ALLOC_SIZE\r\n");
+    }
+
+    printf("[Demo] dynamic allocator end\r\n");
 }
 
 void run_shell(unsigned long hartid, const void *fdt) {
@@ -64,6 +95,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
             printf("  ls - list files in initramfs.\r\n");
             printf("  cat [file] - print file content in initramfs.\r\n");
             printf("  buddy - run buddy allocator demo case.\r\n");
+            printf("  alloc - run dynamic allocator demo case.\r\n");
         } else if (strcmp(buffer, "hello") == 0) {
             printf("Hello world.\r\n");
         } else if (strcmp(buffer, "info") == 0) {
@@ -95,6 +127,8 @@ void run_shell(unsigned long hartid, const void *fdt) {
             }
         } else if (strcmp(buffer, "buddy") == 0) {
             buddy_demo_case();
+        } else if (strcmp(buffer, "alloc") == 0) {
+            dynamic_demo_case();
         } else {
             printf("Unknown command: ");
             printf(buffer);
@@ -106,7 +140,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
 void start_kernel(unsigned long hartid, const void *fdt) {
     init_uart_from_fdt(fdt);
     printf("Hello from Main Kernel!\r\n");
-    buddy_init();
+    allocator_init();
     
     run_shell(hartid, fdt);
 }

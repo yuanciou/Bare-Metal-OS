@@ -1,7 +1,7 @@
 #include "buddy.h"
 
-#include "../lib/list.h"
-#include "../lib/stdio.h"
+#include "list.h"
+#include "stdio.h"
 #include "config.h"
 
 #define PAGE_SHIFT 12UL
@@ -28,17 +28,6 @@ static struct frame frame_array[BUDDY_TOTAL_PAGES];
 static struct list_head free_area[BUDDY_MAX_ORDER + 1];
 static int buddy_ready;
 
-static unsigned int roundup_order(unsigned long pages) {
-    unsigned int order = 0;
-    unsigned long n = 1;
-
-    while (n < pages) {
-        n <<= 1;
-        order++;
-    }
-    return order;
-}
-
 static void mark_block(unsigned long idx, unsigned int order, int head_state, int tail_state) {
     unsigned long count = 1UL << order;
     unsigned long i;
@@ -53,7 +42,7 @@ static void mark_block(unsigned long idx, unsigned int order, int head_state, in
 
 static void add_free_block(unsigned long idx, unsigned int order) {
     mark_block(idx, order, FRAME_FREE_HEAD, FRAME_FREE_TAIL);
-    list_add_tail(&frame_array[idx].node, &free_area[order]);
+    list_add(&frame_array[idx].node, &free_area[order]);
 
     BUDDY_LOG("[+] Add page %lu to order %u. Range of pages: [%lu, %lu]\r\n",
               idx, order, idx, idx + (1UL << order) - 1);
@@ -210,21 +199,4 @@ void buddy_dump_free_areas(void) {
         }
         printf("free_area[%u] = %u\r\n", i, count);
     }
-}
-
-void *allocate(unsigned long size) {
-    unsigned long pages;
-    unsigned int order;
-
-    if (size == 0 || size > BUDDY_MAX_ALLOC_SIZE) {
-        return 0;
-    }
-
-    pages = (size + PAGE_SIZE - 1) >> PAGE_SHIFT;
-    order = roundup_order(pages);
-    return buddy_alloc_pages(order);
-}
-
-void free(void *ptr) {
-    buddy_free_pages(ptr);
 }
