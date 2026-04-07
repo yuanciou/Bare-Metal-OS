@@ -182,7 +182,6 @@ void buddy_init(void) {
     for (i = 0; i < BUDDY_TOTAL_PAGES; ++i) {
         frame_array[i].order = -1;
         frame_array[i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
-        frame_array[i].meta_order = -1;
         frame_array[i].meta_pool_idx = -1;
         INIT_LIST_HEAD(&frame_array[i].node);
     }

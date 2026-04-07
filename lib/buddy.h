@@ -19,7 +19,6 @@ struct frame {
     int order;
     enum page_state state;
     struct list_head node;
-    signed char meta_order;
     signed char meta_pool_idx;
 };
 

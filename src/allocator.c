@@ -89,7 +89,7 @@ static int expand_chunk_pool(int pool_idx) {
 
     frame_array[page_idx].state = PAGE_STATE_ALLOC_CHUNK_POOL;
     frame_array[page_idx].meta_pool_idx = (signed char)pool_idx;
-    frame_array[page_idx].meta_order = 0;
+    frame_array[page_idx].order = 0;
 
     for (i = 0; i < chunk_cnt; ++i) {
         unsigned long chunk_addr = page_addr + (unsigned long)i * chunk_size;
@@ -109,12 +109,12 @@ static void mark_large_pages(unsigned long head_idx, unsigned int order) {
     unsigned long i;
 
     frame_array[head_idx].state = PAGE_STATE_ALLOC_PAGE_HEAD;
-    frame_array[head_idx].meta_order = (signed char)order;
+    frame_array[head_idx].order = (int)order;
     frame_array[head_idx].meta_pool_idx = -1;
 
     for (i = 1; i < count; ++i) {
         frame_array[head_idx + i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
-        frame_array[head_idx + i].meta_order = -1;
+        frame_array[head_idx + i].order = -1;
         frame_array[head_idx + i].meta_pool_idx = -1;
     }
 }
@@ -125,7 +125,7 @@ static void clear_page_meta(unsigned long head_idx, unsigned int order) {
 
     for (i = 0; i < count; ++i) {
         // frame_array[head_idx + i].state = PAGE_STATE_FREE_HEAD;
-        frame_array[head_idx + i].meta_order = -1;
+        // frame_array[head_idx + i].order = -1;
         frame_array[head_idx + i].meta_pool_idx = -1;
     }
 }
@@ -289,7 +289,6 @@ void allocator_init(const void *fdt) {
     }
 
     for (i = 0; i < BUDDY_TOTAL_PAGES; ++i) {
-        frame_array[i].meta_order = -1;
         frame_array[i].meta_pool_idx = -1;
     }
 
@@ -404,7 +403,7 @@ void free(void *ptr) {
             return;
         }
 
-        order = (unsigned int)frame_array[page_idx].meta_order;
+        order = (unsigned int)frame_array[page_idx].order;
         buddy_free_pages(ptr);
         clear_page_meta(page_idx, order);
     }
