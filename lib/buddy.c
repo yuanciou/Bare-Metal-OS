@@ -4,14 +4,18 @@
 #include "stdio.h"
 #include "config.h"
 
-#define PAGE_SHIFT 12UL
-#define PAGE_SIZE (1UL << PAGE_SHIFT)
-
+// ---------- State --------------
+// FREE -> the frame is free
+// ALLOC -> the frame is allocated
+// HEAD -> the head page of a continuous block
+// TAIL -> the **non-head** page of a continuous block (won't be on the free list)
 #define FRAME_FREE_HEAD 0
 #define FRAME_FREE_TAIL 1
 #define FRAME_ALLOC_HEAD 2
 #define FRAME_ALLOC_TAIL 3
 
+// __VA_ARGS__ -> passed all parameters in ... to the location of __VA_ARGS__
+// use do {} while (0) to avoid the syntax error when using in `if`
 #if BUDDY_ENABLE_DEMO_LOG
 #define BUDDY_LOG(...) printf(__VA_ARGS__)
 #else
@@ -24,24 +28,35 @@ struct frame {
     struct list_head node;
 };
 
-static struct frame frame_array[BUDDY_TOTAL_PAGES];
-static struct list_head free_area[BUDDY_MAX_ORDER + 1];
-static unsigned char reserved_map[BUDDY_TOTAL_PAGES];
-static unsigned int reserved_prefix[BUDDY_TOTAL_PAGES + 1];
-static unsigned long g_pool_start = BUDDY_DEFAULT_POOL_START;
-static unsigned long g_pool_size = BUDDY_DEFAULT_POOL_SIZE;
-static unsigned long g_total_pages = BUDDY_DEFAULT_POOL_SIZE >> PAGE_SHIFT;
-static int buddy_ready;
+// g_ -> global variable prefix
+static struct frame frame_array[BUDDY_TOTAL_PAGES]; // page frame metadata array for buddy system
+static struct list_head free_area[BUDDY_MAX_ORDER + 1]; // free area list for each order
+static unsigned char reserved_map[BUDDY_TOTAL_PAGES]; // bitmap to track reserved pages during startup allocation, 1: reserved; 0: free
 
+// prefix sum array for reserved_map
+// if reserved_prefix[end] - reserved_prefix[start] > 0 -> there exist reserved pages -> find quickly 
+static unsigned int reserved_prefix[BUDDY_TOTAL_PAGES + 1];
+static unsigned long g_pool_start = BUDDY_DEFAULT_POOL_START; // memory pool start address
+static unsigned long g_pool_size = BUDDY_DEFAULT_POOL_SIZE; // memory pool size
+static unsigned long g_total_pages = BUDDY_DEFAULT_POOL_SIZE >> PAGE_SHIFT; // total pages in the memory pool
+static int buddy_ready; // check the buddy_init() is done
+
+// ------------- ALIGN -------------------
+// PAGE_SIZE = 0001 0000 0000 0000 (4096)
+// PAGE_SIZE - 1UL = 0000 1111 1111 1111 (4095)
+// ~(PAGE_SIZE - 1UL) = 1111 0000 0000 0000 -> the mask reset the last 12 bits -> align down
 static unsigned long align_down(unsigned long value) {
     return value & ~(PAGE_SIZE - 1UL);
 }
 
 static unsigned long align_up(unsigned long value) {
+    // align down (value + PAGE_SIZE - 1)
     return (value + PAGE_SIZE - 1UL) & ~(PAGE_SIZE - 1UL);
 }
 
 static unsigned long page_to_addr(unsigned long idx) {
+    // addr = start + idx * PAGE_SIZE
+    // (<< PAGE_SHIFT) = * 2^PAGE_SHIFT
     return g_pool_start + (idx << PAGE_SHIFT);
 }
 
@@ -49,12 +64,23 @@ static int range_has_reserved(unsigned long idx, unsigned long count) {
     return reserved_prefix[idx + count] != reserved_prefix[idx];
 }
 
+/**
+ * @brief Find the head of the continuous block and the tailing pages of this block.
+ *
+ * @param idx the head page idx of the block
+ * @param order the order of the block
+ * @param head_state the state to mark the head page (FREE/ALLOC)
+ * @param tail_state the state to mark the tailing pages (FREE/ALLOC)
+ */
 static void mark_block(unsigned long idx, unsigned int order, int head_state, int tail_state) {
-    unsigned long count = 1UL << order;
+    unsigned long count = 1UL << order; // #pages in this block
     unsigned long i;
 
+    // mark the head page
     frame_array[idx].state = head_state;
     frame_array[idx].order = (int)order;
+
+    // mark the tailing pages of this block
     for (i = 1; i < count; ++i) {
         frame_array[idx + i].state = tail_state;
         frame_array[idx + i].order = -1;
@@ -63,20 +89,27 @@ static void mark_block(unsigned long idx, unsigned int order, int head_state, in
 
 static void add_free_block(unsigned long idx, unsigned int order) {
     mark_block(idx, order, FRAME_FREE_HEAD, FRAME_FREE_TAIL);
+
+    // add the head page (frame_array[idx]) to the free list of this order (free_area[order])
+    // frame_array -> the struct frame (metadata)
+    // free_area -> only the list_head 
     list_add(&frame_array[idx].node, &free_area[order]);
 
-    BUDDY_LOG("[+] Add page %lu to order %u. Range of pages: [%lu, %lu]\r\n",
+    BUDDY_LOG("[+ buddy] Add page %lu to order %u. Range of pages: [%lu, %lu]\r\n",
               idx, order, idx, idx + (1UL << order) - 1);
 }
 
 static void remove_free_block(unsigned long idx, unsigned int order) {
-    list_del(&frame_array[idx].node);
-    frame_array[idx].state = FRAME_ALLOC_HEAD;
+    list_del(&frame_array[idx].node); // remove from the free list
+    frame_array[idx].state = FRAME_ALLOC_HEAD; // mark as ALLOC
 
-    BUDDY_LOG("[-] Remove page %lu from order %u. Range of pages: [%lu, %lu]\r\n",
+    BUDDY_LOG("[- buddy] Remove page %lu from order %u. Range of pages: [%lu, %lu]\r\n",
               idx, order, idx, idx + (1UL << order) - 1);
 }
 
+/**
+ * @brief Build the prefix sum of the reserved_map
+ */
 static void build_reserved_prefix(void) {
     unsigned long i;
 
@@ -86,30 +119,44 @@ static void build_reserved_prefix(void) {
     }
 }
 
+/**
+ * @brief Set the memory pool region and init the reserved_map
+ *
+ * @param start the start address of the memory pool
+ * @param size the size of the memory pool
+ */
 void buddy_set_region(unsigned long start, unsigned long size) {
     unsigned long i;
 
-    if (size == 0) {
+    if (size == 0) { // use default region if size is 0 or invalid
         g_pool_start = BUDDY_DEFAULT_POOL_START;
         g_pool_size = BUDDY_DEFAULT_POOL_SIZE;
     } else {
+        // use align_down() to make sure the page-aligned region is safe
         g_pool_start = align_down(start);
         g_pool_size = align_down(size);
+        
+        // check the upper bound limit to avoid overflow
         if (g_pool_size > BUDDY_MAX_POOL_SIZE) {
             g_pool_size = BUDDY_MAX_POOL_SIZE;
         }
     }
 
+    // check the lower bound limit to avoid invalid region
     if (g_pool_size < PAGE_SIZE) {
+        // if the size less than a page -> use default region
         g_pool_size = BUDDY_DEFAULT_POOL_SIZE;
         g_pool_start = BUDDY_DEFAULT_POOL_START;
     }
 
+    // cal the #pages
     g_total_pages = g_pool_size >> PAGE_SHIFT;
     if (g_total_pages > BUDDY_TOTAL_PAGES) {
+        // check the #page upper bound to avoid buffer overflow
         g_total_pages = BUDDY_TOTAL_PAGES;
     }
 
+    // init the reserved_map (find reserved will be called later)
     for (i = 0; i < BUDDY_TOTAL_PAGES; ++i) {
         reserved_map[i] = 0;
     }
@@ -128,6 +175,8 @@ void buddy_mark_reserved_range(unsigned long start, unsigned long size) {
 
     region_end = g_pool_start + g_pool_size;
     reserve_end = start + size;
+    
+    // not in the memory pool region -> ignore
     if (reserve_end <= g_pool_start || start >= region_end) {
         return;
     }
@@ -139,9 +188,10 @@ void buddy_mark_reserved_range(unsigned long start, unsigned long size) {
         reserve_end = region_end;
     }
 
-    page_start = (start - g_pool_start) >> PAGE_SHIFT;
-    page_end = align_up(reserve_end - g_pool_start) >> PAGE_SHIFT;
-    if (page_end > g_total_pages) {
+    // find the page idx range
+    page_start = (start - g_pool_start) >> PAGE_SHIFT; // >> PAGE_SHIFT = / PAGE_SIZE
+    page_end = align_up(reserve_end - g_pool_start) >> PAGE_SHIFT; // align_up() to make sure the tailing page is fully reserved
+    if (page_end > g_total_pages) { // aviod overflow
         page_end = g_total_pages;
     }
 
