@@ -19,13 +19,6 @@ extern char _end;
 #define ALLOC_LOG(...) do { } while (0)
 #endif
 
-enum page_meta_type {
-    PAGE_META_NONE = 0,
-    PAGE_META_LARGE_HEAD,
-    PAGE_META_LARGE_TAIL,
-    PAGE_META_POOL,
-};
-
 struct chunk {
     struct list_head node;
 };
@@ -41,9 +34,6 @@ static const unsigned int g_pool_sizes[CHUNK_POOL_COUNT] = {
 };
 
 static struct chunk_pool g_pools[CHUNK_POOL_COUNT];
-static unsigned char g_page_meta_type[BUDDY_TOTAL_PAGES];
-static signed char g_page_meta_order[BUDDY_TOTAL_PAGES];
-static signed char g_page_meta_pool_idx[BUDDY_TOTAL_PAGES];
 static int g_allocator_ready;
 
 static unsigned long roundup_order(unsigned long pages) {
@@ -97,9 +87,9 @@ static int expand_chunk_pool(int pool_idx) {
     chunk_size = g_pools[pool_idx].chunk_size;
     chunk_cnt = PAGE_SIZE / chunk_size;
 
-    g_page_meta_type[page_idx] = PAGE_META_POOL;
-    g_page_meta_pool_idx[page_idx] = (signed char)pool_idx;
-    g_page_meta_order[page_idx] = 0;
+    frame_array[page_idx].state = PAGE_STATE_ALLOC_CHUNK_POOL;
+    frame_array[page_idx].meta_pool_idx = (signed char)pool_idx;
+    frame_array[page_idx].meta_order = 0;
 
     for (i = 0; i < chunk_cnt; ++i) {
         unsigned long chunk_addr = page_addr + (unsigned long)i * chunk_size;
@@ -118,14 +108,14 @@ static void mark_large_pages(unsigned long head_idx, unsigned int order) {
     unsigned long count = 1UL << order;
     unsigned long i;
 
-    g_page_meta_type[head_idx] = PAGE_META_LARGE_HEAD;
-    g_page_meta_order[head_idx] = (signed char)order;
-    g_page_meta_pool_idx[head_idx] = -1;
+    frame_array[head_idx].state = PAGE_STATE_ALLOC_PAGE_HEAD;
+    frame_array[head_idx].meta_order = (signed char)order;
+    frame_array[head_idx].meta_pool_idx = -1;
 
     for (i = 1; i < count; ++i) {
-        g_page_meta_type[head_idx + i] = PAGE_META_LARGE_TAIL;
-        g_page_meta_order[head_idx + i] = -1;
-        g_page_meta_pool_idx[head_idx + i] = -1;
+        frame_array[head_idx + i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
+        frame_array[head_idx + i].meta_order = -1;
+        frame_array[head_idx + i].meta_pool_idx = -1;
     }
 }
 
@@ -134,9 +124,9 @@ static void clear_page_meta(unsigned long head_idx, unsigned int order) {
     unsigned long i;
 
     for (i = 0; i < count; ++i) {
-        g_page_meta_type[head_idx + i] = PAGE_META_NONE;
-        g_page_meta_order[head_idx + i] = -1;
-        g_page_meta_pool_idx[head_idx + i] = -1;
+        // frame_array[head_idx + i].state = PAGE_STATE_FREE_HEAD;
+        frame_array[head_idx + i].meta_order = -1;
+        frame_array[head_idx + i].meta_pool_idx = -1;
     }
 }
 
@@ -299,9 +289,8 @@ void allocator_init(const void *fdt) {
     }
 
     for (i = 0; i < BUDDY_TOTAL_PAGES; ++i) {
-        g_page_meta_type[i] = PAGE_META_NONE;
-        g_page_meta_order[i] = -1;
-        g_page_meta_pool_idx[i] = -1;
+        frame_array[i].meta_order = -1;
+        frame_array[i].meta_pool_idx = -1;
     }
 
     g_allocator_ready = 1;
@@ -367,7 +356,7 @@ void *allocate(unsigned long size) {
 void free(void *ptr) {
     unsigned long addr;
     unsigned long page_idx;
-    unsigned char meta_type;
+    enum page_state state;
 
     if (!g_allocator_ready || !ptr) {
         return;
@@ -383,10 +372,10 @@ void free(void *ptr) {
         return;
     }
 
-    meta_type = g_page_meta_type[page_idx];
+    state = frame_array[page_idx].state;
 
-    if (meta_type == PAGE_META_POOL) {
-        int pool_idx = g_page_meta_pool_idx[page_idx];
+    if (state == PAGE_STATE_ALLOC_CHUNK_POOL) {
+        int pool_idx = frame_array[page_idx].meta_pool_idx;
         unsigned long page_base = addr & ~(PAGE_SIZE - 1UL);
         unsigned int chunk_size;
         unsigned long offset;
@@ -408,14 +397,14 @@ void free(void *ptr) {
         return;
     }
 
-    if (meta_type == PAGE_META_LARGE_HEAD) {
+    if (state == PAGE_STATE_ALLOC_PAGE_HEAD) {
         unsigned int order;
 
         if ((addr & (PAGE_SIZE - 1UL)) != 0) {
             return;
         }
 
-        order = (unsigned int)g_page_meta_order[page_idx];
+        order = (unsigned int)frame_array[page_idx].meta_order;
         buddy_free_pages(ptr);
         clear_page_meta(page_idx, order);
     }

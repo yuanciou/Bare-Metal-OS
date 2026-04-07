@@ -5,16 +5,6 @@
 #include "config.h"
 #include "align.h"
 
-// ---------- State --------------
-// FREE -> the frame is free
-// ALLOC -> the frame is allocated
-// HEAD -> the head page of a continuous block
-// TAIL -> the **non-head** page of a continuous block (won't be on the free list)
-#define FRAME_FREE_HEAD 0
-#define FRAME_FREE_TAIL 1
-#define FRAME_ALLOC_HEAD 2
-#define FRAME_ALLOC_TAIL 3
-
 // __VA_ARGS__ -> passed all parameters in ... to the location of __VA_ARGS__
 // use do {} while (0) to avoid the syntax error when using in `if`
 #if ALLOC_ENABLE_DEMO_LOG
@@ -24,7 +14,7 @@
 #endif
 
 // g_ -> global variable prefix
-static struct frame frame_array[BUDDY_TOTAL_PAGES]; // page frame metadata array for buddy system
+struct frame frame_array[BUDDY_TOTAL_PAGES]; // page frame metadata array for buddy system
 static struct list_head free_area[BUDDY_MAX_ORDER + 1]; // free area list for each order
 static unsigned char reserved_map[BUDDY_TOTAL_PAGES]; // bitmap to track reserved pages during startup allocation, 1: reserved; 0: free
 
@@ -54,7 +44,10 @@ static int range_has_reserved(unsigned long idx, unsigned long count) {
  * @param head_state the state to mark the head page (FREE/ALLOC)
  * @param tail_state the state to mark the tailing pages (FREE/ALLOC)
  */
-static void mark_block(unsigned long idx, unsigned int order, int head_state, int tail_state) {
+static void mark_block(unsigned long idx,
+                       unsigned int order,
+                       enum page_state head_state,
+                       enum page_state tail_state) {
     unsigned long count = 1UL << order; // #pages in this block
     unsigned long i;
 
@@ -70,7 +63,7 @@ static void mark_block(unsigned long idx, unsigned int order, int head_state, in
 }
 
 static void add_free_block(unsigned long idx, unsigned int order) {
-    mark_block(idx, order, FRAME_FREE_HEAD, FRAME_FREE_TAIL);
+    mark_block(idx, order, PAGE_STATE_FREE_HEAD, PAGE_STATE_FREE_TAIL);
 
     // add the head page (frame_array[idx]) to the free list of this order (free_area[order])
     // frame_array -> the struct frame (metadata)
@@ -83,7 +76,7 @@ static void add_free_block(unsigned long idx, unsigned int order) {
 
 static void remove_free_block(unsigned long idx, unsigned int order) {
     list_del(&frame_array[idx].node); // remove from the free list
-    frame_array[idx].state = FRAME_ALLOC_HEAD; // mark as ALLOC
+    frame_array[idx].state = PAGE_STATE_ALLOC_PAGE_HEAD; // mark as ALLOC
 
     BUDDY_LOG("[- buddy] Remove page %lu from order %u. Range of pages: [%lu, %lu]\r\n",
               idx, order, idx, idx + (1UL << order) - 1);
@@ -188,7 +181,9 @@ void buddy_init(void) {
 
     for (i = 0; i < BUDDY_TOTAL_PAGES; ++i) {
         frame_array[i].order = -1;
-        frame_array[i].state = FRAME_ALLOC_TAIL;
+        frame_array[i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
+        frame_array[i].meta_order = -1;
+        frame_array[i].meta_pool_idx = -1;
         INIT_LIST_HEAD(&frame_array[i].node);
     }
 
@@ -200,7 +195,7 @@ void buddy_init(void) {
 
     while (idx < G_MEM_TOTAL_PAGE) {
         if (reserved_map[idx]) {
-            mark_block(idx, 0, FRAME_ALLOC_HEAD, FRAME_ALLOC_TAIL);
+            mark_block(idx, 0, PAGE_STATE_ALLOC_PAGE_HEAD, PAGE_STATE_ALLOC_PAGE_TAIL);
             idx++;
             continue;
         }
@@ -254,7 +249,7 @@ void *buddy_alloc_pages(unsigned int order) {
                       buddy_idx, current);
         }
 
-        mark_block(idx, order, FRAME_ALLOC_HEAD, FRAME_ALLOC_TAIL);
+        mark_block(idx, order, PAGE_STATE_ALLOC_PAGE_HEAD, PAGE_STATE_ALLOC_PAGE_TAIL);
         BUDDY_LOG("[Page] Allocate 0x%lx at order %u, page %lu\r\n",
                   page_to_addr(idx),
                   order,
@@ -283,12 +278,12 @@ void buddy_free_pages(void *ptr) {
     }
 
     idx = (addr - G_MEMPOOL_START) >> PAGE_SHIFT;
-    if (idx >= G_MEM_TOTAL_PAGE || frame_array[idx].state != FRAME_ALLOC_HEAD) {
+    if (idx >= G_MEM_TOTAL_PAGE || frame_array[idx].state != PAGE_STATE_ALLOC_PAGE_HEAD) {
         return;
     }
 
     order = (unsigned int)frame_array[idx].order;
-    mark_block(idx, order, FRAME_FREE_HEAD, FRAME_FREE_TAIL);
+    mark_block(idx, order, PAGE_STATE_FREE_HEAD, PAGE_STATE_FREE_TAIL);
 
     while (order < BUDDY_MAX_ORDER) {
         unsigned long buddy_idx = idx ^ (1UL << order);
@@ -296,7 +291,7 @@ void buddy_free_pages(void *ptr) {
         if (buddy_idx >= BUDDY_TOTAL_PAGES) {
             break;
         }
-        if (frame_array[buddy_idx].state != FRAME_FREE_HEAD ||
+        if (frame_array[buddy_idx].state != PAGE_STATE_FREE_HEAD ||
             (unsigned int)frame_array[buddy_idx].order != order) {
             break;
         }
@@ -313,7 +308,7 @@ void buddy_free_pages(void *ptr) {
         }
 
         order++;
-        mark_block(idx, order, FRAME_FREE_HEAD, FRAME_FREE_TAIL);
+        mark_block(idx, order, PAGE_STATE_FREE_HEAD, PAGE_STATE_FREE_TAIL);
         BUDDY_LOG("[Merge] Merge iteratively to order %u at page %lu\r\n", order, idx);
     }
 
