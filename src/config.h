@@ -5,7 +5,7 @@
 extern unsigned long uart_base_addr;
 
 // 1: print the buddy log; 0: disable the buddylog
-#define BUDDY_ENABLE_DEMO_LOG 1
+#define ALLOC_ENABLE_DEMO_LOG 1
 
 // Buddy allocator config (Basic Exercise 1)
 #define BUDDY_MAX_ORDER 10

@@ -13,7 +13,7 @@
 extern char _start;
 extern char _end;
 
-#if BUDDY_ENABLE_DEMO_LOG
+#if ALLOC_ENABLE_DEMO_LOG
 #define ALLOC_LOG(...) printf(__VA_ARGS__)
 #else
 #define ALLOC_LOG(...) do { } while (0)
@@ -57,23 +57,15 @@ static unsigned long roundup_order(unsigned long pages) {
     return order;
 }
 
-static unsigned long allocator_pool_start(void) {
-    return buddy_pool_start();
-}
-
-static unsigned long allocator_pool_size(void) {
-    return buddy_pool_size();
-}
-
 static int addr_in_pool(unsigned long addr) {
-    unsigned long start = allocator_pool_start();
-    unsigned long size = allocator_pool_size();
+    unsigned long start = G_MEMPOOL_START;
+    unsigned long size = G_MEMPOOL_SIZE;
 
     return size != 0 && addr >= start && addr < start + size;
 }
 
 static unsigned long addr_to_page_idx(unsigned long addr) {
-    return (addr - allocator_pool_start()) >> PAGE_SHIFT;
+    return (addr - G_MEMPOOL_START) >> PAGE_SHIFT;
 }
 
 static int find_pool_index(unsigned long size) {
@@ -233,8 +225,8 @@ void memory_reserve(unsigned long start, unsigned long size) {
     }
 
     end = start + size;
-    pool_start = buddy_pool_start();
-    pool_end = pool_start + buddy_pool_size();
+    pool_start = G_MEMPOOL_START;
+    pool_end = pool_start + G_MEMPOOL_SIZE;
 
     if (end <= pool_start || start >= pool_end) {
         ALLOC_LOG("[Reserve] Skip address [0x%lx, 0x%lx): out of pool [0x%lx, 0x%lx)\r\n",

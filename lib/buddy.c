@@ -17,17 +17,11 @@
 
 // __VA_ARGS__ -> passed all parameters in ... to the location of __VA_ARGS__
 // use do {} while (0) to avoid the syntax error when using in `if`
-#if BUDDY_ENABLE_DEMO_LOG
+#if ALLOC_ENABLE_DEMO_LOG
 #define BUDDY_LOG(...) printf(__VA_ARGS__)
 #else
 #define BUDDY_LOG(...) do { } while (0)
 #endif
-
-struct frame {
-    int order;
-    int state;
-    struct list_head node;
-};
 
 // g_ -> global variable prefix
 static struct frame frame_array[BUDDY_TOTAL_PAGES]; // page frame metadata array for buddy system
@@ -37,15 +31,15 @@ static unsigned char reserved_map[BUDDY_TOTAL_PAGES]; // bitmap to track reserve
 // prefix sum array for reserved_map
 // if reserved_prefix[end] - reserved_prefix[start] > 0 -> there exist reserved pages -> find quickly 
 static unsigned int reserved_prefix[BUDDY_TOTAL_PAGES + 1];
-static unsigned long g_pool_start = BUDDY_DEFAULT_POOL_START; // memory pool start address
-static unsigned long g_pool_size = BUDDY_DEFAULT_POOL_SIZE; // memory pool size
-static unsigned long g_total_pages = BUDDY_DEFAULT_POOL_SIZE >> PAGE_SHIFT; // total pages in the memory pool
+unsigned long G_MEMPOOL_START = BUDDY_DEFAULT_POOL_START; // memory pool start address
+unsigned long G_MEMPOOL_SIZE = BUDDY_DEFAULT_POOL_SIZE; // memory pool size
+unsigned long G_MEM_TOTAL_PAGE = BUDDY_DEFAULT_POOL_SIZE >> PAGE_SHIFT; // total pages in the memory pool
 static int buddy_ready; // check the buddy_init() is done
 
 static unsigned long page_to_addr(unsigned long idx) {
     // addr = start + idx * PAGE_SIZE
     // (<< PAGE_SHIFT) = * 2^PAGE_SHIFT
-    return g_pool_start + (idx << PAGE_SHIFT);
+    return G_MEMPOOL_START + (idx << PAGE_SHIFT);
 }
 
 static int range_has_reserved(unsigned long idx, unsigned long count) {
@@ -102,7 +96,7 @@ static void build_reserved_prefix(void) {
     unsigned long i;
 
     reserved_prefix[0] = 0;
-    for (i = 0; i < g_total_pages; ++i) {
+    for (i = 0; i < G_MEM_TOTAL_PAGE; ++i) {
         reserved_prefix[i + 1] = reserved_prefix[i] + (reserved_map[i] ? 1U : 0U);
     }
 }
@@ -117,31 +111,31 @@ void buddy_set_region(unsigned long start, unsigned long size) {
     unsigned long i;
 
     if (size == 0) { // use default region if size is 0 or invalid
-        g_pool_start = BUDDY_DEFAULT_POOL_START;
-        g_pool_size = BUDDY_DEFAULT_POOL_SIZE;
+        G_MEMPOOL_START = BUDDY_DEFAULT_POOL_START;
+        G_MEMPOOL_SIZE = BUDDY_DEFAULT_POOL_SIZE;
     } else {
         // use align_down_ul() to make sure the page-aligned region is safe
-        g_pool_start = align_down_ul(start, PAGE_SIZE);
-        g_pool_size = align_down_ul(size, PAGE_SIZE);
+        G_MEMPOOL_START = align_down_ul(start, PAGE_SIZE);
+        G_MEMPOOL_SIZE = align_down_ul(size, PAGE_SIZE);
         
         // check the upper bound limit to avoid overflow
-        if (g_pool_size > BUDDY_MAX_POOL_SIZE) {
-            g_pool_size = BUDDY_MAX_POOL_SIZE;
+        if (G_MEMPOOL_SIZE > BUDDY_MAX_POOL_SIZE) {
+            G_MEMPOOL_SIZE = BUDDY_MAX_POOL_SIZE;
         }
     }
 
     // check the lower bound limit to avoid invalid region
-    if (g_pool_size < PAGE_SIZE) {
+    if (G_MEMPOOL_SIZE < PAGE_SIZE) {
         // if the size less than a page -> use default region
-        g_pool_size = BUDDY_DEFAULT_POOL_SIZE;
-        g_pool_start = BUDDY_DEFAULT_POOL_START;
+        G_MEMPOOL_SIZE = BUDDY_DEFAULT_POOL_SIZE;
+        G_MEMPOOL_START = BUDDY_DEFAULT_POOL_START;
     }
 
     // cal the #pages
-    g_total_pages = g_pool_size >> PAGE_SHIFT;
-    if (g_total_pages > BUDDY_TOTAL_PAGES) {
+    G_MEM_TOTAL_PAGE = G_MEMPOOL_SIZE >> PAGE_SHIFT;
+    if (G_MEM_TOTAL_PAGE > BUDDY_TOTAL_PAGES) {
         // check the #page upper bound to avoid buffer overflow
-        g_total_pages = BUDDY_TOTAL_PAGES;
+        G_MEM_TOTAL_PAGE = BUDDY_TOTAL_PAGES;
     }
 
     // init the reserved_map (find reserved will be called later)
@@ -157,30 +151,30 @@ void buddy_mark_reserved_range(unsigned long start, unsigned long size) {
     unsigned long page_end;
     unsigned long i;
 
-    if (size == 0 || g_total_pages == 0) {
+    if (size == 0 || G_MEM_TOTAL_PAGE == 0) {
         return;
     }
 
-    region_end = g_pool_start + g_pool_size;
+    region_end = G_MEMPOOL_START + G_MEMPOOL_SIZE;
     reserve_end = start + size;
     
     // not in the memory pool region -> ignore
-    if (reserve_end <= g_pool_start || start >= region_end) {
+    if (reserve_end <= G_MEMPOOL_START || start >= region_end) {
         return;
     }
 
-    if (start < g_pool_start) {
-        start = g_pool_start;
+    if (start < G_MEMPOOL_START) {
+        start = G_MEMPOOL_START;
     }
     if (reserve_end > region_end) {
         reserve_end = region_end;
     }
 
     // find the page idx range
-    page_start = (start - g_pool_start) >> PAGE_SHIFT; // >> PAGE_SHIFT = / PAGE_SIZE
-    page_end = align_up_ul(reserve_end - g_pool_start, PAGE_SIZE) >> PAGE_SHIFT; // align_up_ul() to make sure the tailing page is fully reserved
-    if (page_end > g_total_pages) { // aviod overflow
-        page_end = g_total_pages;
+    page_start = (start - G_MEMPOOL_START) >> PAGE_SHIFT; // >> PAGE_SHIFT = / PAGE_SIZE
+    page_end = align_up_ul(reserve_end - G_MEMPOOL_START, PAGE_SIZE) >> PAGE_SHIFT; // align_up_ul() to make sure the tailing page is fully reserved
+    if (page_end > G_MEM_TOTAL_PAGE) { // aviod overflow
+        page_end = G_MEM_TOTAL_PAGE;
     }
 
     for (i = page_start; i < page_end; ++i) {
@@ -204,7 +198,7 @@ void buddy_init(void) {
 
     build_reserved_prefix();
 
-    while (idx < g_total_pages) {
+    while (idx < G_MEM_TOTAL_PAGE) {
         if (reserved_map[idx]) {
             mark_block(idx, 0, FRAME_ALLOC_HEAD, FRAME_ALLOC_TAIL);
             idx++;
@@ -215,7 +209,7 @@ void buddy_init(void) {
         for (order = BUDDY_MAX_ORDER; order >= 0; --order) {
             unsigned long block_pages = 1UL << order;
             if ((idx & (block_pages - 1)) == 0 &&
-                idx + block_pages <= g_total_pages &&
+                idx + block_pages <= G_MEM_TOTAL_PAGE &&
                 !range_has_reserved(idx, block_pages)) {
                 add_free_block(idx, (unsigned int)order);
                 idx += block_pages;
@@ -226,9 +220,9 @@ void buddy_init(void) {
 
     buddy_ready = 1;
     BUDDY_LOG("[Init] Buddy initialized at [0x%lx, 0x%lx), total pages: %u\r\n",
-              g_pool_start,
-              g_pool_start + g_pool_size,
-              (unsigned int)g_total_pages);
+              G_MEMPOOL_START,
+              G_MEMPOOL_START + G_MEMPOOL_SIZE,
+              (unsigned int)G_MEM_TOTAL_PAGE);
 }
 
 void *buddy_alloc_pages(unsigned int order) {
@@ -281,15 +275,15 @@ void buddy_free_pages(void *ptr) {
     }
 
     addr = (unsigned long)ptr;
-    if (addr < g_pool_start || addr >= g_pool_start + g_pool_size) {
+    if (addr < G_MEMPOOL_START || addr >= G_MEMPOOL_START + G_MEMPOOL_SIZE) {
         return;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0) {
         return;
     }
 
-    idx = (addr - g_pool_start) >> PAGE_SHIFT;
-    if (idx >= g_total_pages || frame_array[idx].state != FRAME_ALLOC_HEAD) {
+    idx = (addr - G_MEMPOOL_START) >> PAGE_SHIFT;
+    if (idx >= G_MEM_TOTAL_PAGE || frame_array[idx].state != FRAME_ALLOC_HEAD) {
         return;
     }
 
@@ -328,18 +322,6 @@ void buddy_free_pages(void *ptr) {
               page_to_addr(idx),
               order,
               idx);
-}
-
-unsigned long buddy_pool_start(void) {
-    return g_pool_start;
-}
-
-unsigned long buddy_pool_size(void) {
-    return g_pool_size;
-}
-
-unsigned long buddy_total_pages(void) {
-    return g_total_pages;
 }
 
 void buddy_dump_free_areas(void) {
