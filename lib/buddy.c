@@ -3,6 +3,7 @@
 #include "list.h"
 #include "stdio.h"
 #include "config.h"
+#include "align.h"
 
 // ---------- State --------------
 // FREE -> the frame is free
@@ -40,19 +41,6 @@ static unsigned long g_pool_start = BUDDY_DEFAULT_POOL_START; // memory pool sta
 static unsigned long g_pool_size = BUDDY_DEFAULT_POOL_SIZE; // memory pool size
 static unsigned long g_total_pages = BUDDY_DEFAULT_POOL_SIZE >> PAGE_SHIFT; // total pages in the memory pool
 static int buddy_ready; // check the buddy_init() is done
-
-// ------------- ALIGN -------------------
-// PAGE_SIZE = 0001 0000 0000 0000 (4096)
-// PAGE_SIZE - 1UL = 0000 1111 1111 1111 (4095)
-// ~(PAGE_SIZE - 1UL) = 1111 0000 0000 0000 -> the mask reset the last 12 bits -> align down
-static unsigned long align_down(unsigned long value) {
-    return value & ~(PAGE_SIZE - 1UL);
-}
-
-static unsigned long align_up(unsigned long value) {
-    // align down (value + PAGE_SIZE - 1)
-    return (value + PAGE_SIZE - 1UL) & ~(PAGE_SIZE - 1UL);
-}
 
 static unsigned long page_to_addr(unsigned long idx) {
     // addr = start + idx * PAGE_SIZE
@@ -132,9 +120,9 @@ void buddy_set_region(unsigned long start, unsigned long size) {
         g_pool_start = BUDDY_DEFAULT_POOL_START;
         g_pool_size = BUDDY_DEFAULT_POOL_SIZE;
     } else {
-        // use align_down() to make sure the page-aligned region is safe
-        g_pool_start = align_down(start);
-        g_pool_size = align_down(size);
+        // use align_down_ul() to make sure the page-aligned region is safe
+        g_pool_start = align_down_ul(start, PAGE_SIZE);
+        g_pool_size = align_down_ul(size, PAGE_SIZE);
         
         // check the upper bound limit to avoid overflow
         if (g_pool_size > BUDDY_MAX_POOL_SIZE) {
@@ -190,7 +178,7 @@ void buddy_mark_reserved_range(unsigned long start, unsigned long size) {
 
     // find the page idx range
     page_start = (start - g_pool_start) >> PAGE_SHIFT; // >> PAGE_SHIFT = / PAGE_SIZE
-    page_end = align_up(reserve_end - g_pool_start) >> PAGE_SHIFT; // align_up() to make sure the tailing page is fully reserved
+    page_end = align_up_ul(reserve_end - g_pool_start, PAGE_SIZE) >> PAGE_SHIFT; // align_up_ul() to make sure the tailing page is fully reserved
     if (page_end > g_total_pages) { // aviod overflow
         page_end = g_total_pages;
     }

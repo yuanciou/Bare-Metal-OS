@@ -3,6 +3,7 @@
 #include "endian.h"
 #include "string.h"
 #include "fdt.h"
+#include "align.h"
 
 extern unsigned long uart_base_addr;
 
@@ -24,10 +25,6 @@ struct fdt_header {
     uint32_t size_dt_strings;
     uint32_t size_dt_struct;
 };
-
-static inline const void* align_up(const void* ptr, size_t align) {
-    return (const void*)(((uintptr_t)ptr + align - 1) & ~(align - 1));
-}
 
 static inline int match_path(const char* current, const char* path) {
     while (*path) {   // compare the current path with the target path char by char
@@ -82,7 +79,7 @@ int fdt_path_offset(const void* fdt, const char* path) {
 
             // move the pointer to name_len + 1 ('\0')
             // and align it to 4 bytes since the spec
-            struct_ptr = align_up(struct_ptr + name_len + 1, 4);
+            struct_ptr = align_up_ptr(struct_ptr + name_len + 1, 4);
             
             // add the node name to current path
             // then call match_path to check if it match the target path
@@ -121,7 +118,7 @@ int fdt_path_offset(const void* fdt, const char* path) {
             // jump to the next token by adding (4 + 4) bytes + len -> align to 4 bytes
             uint32_t len = bswap32(((const uint32_t*)struct_ptr)[0]);
             struct_ptr += (4 + 4);
-            struct_ptr = align_up(struct_ptr + len, 4);
+            struct_ptr = align_up_ptr(struct_ptr + len, 4);
         } else if (token == FDT_NOP) {
             // Do nothing
             // since we made pointer + 4 at the begining
@@ -151,7 +148,7 @@ const void* fdt_getprop(const void* fdt,
     
     // get node name same as `fdt_path_offset`
     const char* node_name = struct_ptr;
-    struct_ptr = align_up(struct_ptr + strlen(node_name) + 1, 4);
+    struct_ptr = align_up_ptr(struct_ptr + strlen(node_name) + 1, 4);
 
     while (1) {
         token = bswap32(*(const uint32_t*)struct_ptr);
@@ -173,7 +170,7 @@ const void* fdt_getprop(const void* fdt,
                 // so we can directly return the pointer to the property value
                 return struct_ptr;
             }
-            struct_ptr = align_up(struct_ptr + len, 4);
+            struct_ptr = align_up_ptr(struct_ptr + len, 4);
         } else if (token == FDT_NOP) {
             // Do nothing
         } else {
@@ -470,7 +467,7 @@ int fdt_get_reserved_memory_region(const void *fdt,
     }
 
     struct_ptr += 4;
-    struct_ptr = align_up(struct_ptr + strlen(struct_ptr) + 1, 4);
+    struct_ptr = align_up_ptr(struct_ptr + strlen(struct_ptr) + 1, 4);
 
     while (depth > 0) {
         const char *token_ptr = struct_ptr;
@@ -482,7 +479,7 @@ int fdt_get_reserved_memory_region(const void *fdt,
             int child_offset = (int)(token_ptr - (const char *)fdt);
             const char *child_name = struct_ptr;
 
-            struct_ptr = align_up(struct_ptr + strlen(child_name) + 1, 4);
+            struct_ptr = align_up_ptr(struct_ptr + strlen(child_name) + 1, 4);
             depth++;
 
             if (depth == 2) {
@@ -520,7 +517,7 @@ int fdt_get_reserved_memory_region(const void *fdt,
             uint32_t prop_len = bswap32(((const uint32_t *)struct_ptr)[0]);
 
             struct_ptr += 8;
-            struct_ptr = align_up(struct_ptr + prop_len, 4);
+            struct_ptr = align_up_ptr(struct_ptr + prop_len, 4);
         } else if (token == FDT_NOP) {
             continue;
         } else if (token == FDT_END) {
