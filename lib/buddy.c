@@ -108,7 +108,7 @@ void buddy_set_region(unsigned long start, unsigned long size) {
         G_MEMPOOL_SIZE = BUDDY_DEFAULT_POOL_SIZE;
     } else {
         // use align_down_ul() to make sure the page-aligned region is safe
-        G_MEMPOOL_START = align_down_ul(start, PAGE_SIZE);
+        G_MEMPOOL_START = align_up_ul(start, PAGE_SIZE);
         G_MEMPOOL_SIZE = align_down_ul(size, PAGE_SIZE);
         
         // check the upper bound limit to avoid overflow
