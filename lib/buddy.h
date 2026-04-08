@@ -22,7 +22,7 @@ struct frame {
     int order;
     enum page_state state;
     struct list_head node;
-    signed char meta_pool_idx;
+    signed char meta_pool_idx;  // the pool idx (map by `g_pools[meta_pool_idx].chunk_size`)
 };
 
 extern struct frame *frame_array;

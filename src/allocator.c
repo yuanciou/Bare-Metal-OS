@@ -47,28 +47,33 @@ struct reserved_region {
 static struct reserved_region reserved_rgns[MAX_RESERVED_REGIONS];
 static int reserved_rgn_count = 0;
 
+/**
+ * @brief Round up the number of pages to the nearest power of 2
+ *
+ * @param pages the number of pages
+ * @return the order of the block that can hold at least `pages` pages
+ */
 static unsigned long roundup_order(unsigned long pages) {
     unsigned int order = 0;
     unsigned long n = 1;
 
     while (n < pages) {
-        n <<= 1;
+        n <<= 1; // n = n * 2
         order++;
     }
     return order;
 }
 
-static int addr_in_pool(unsigned long addr) {
-    unsigned long start = G_MEMPOOL_START;
-    unsigned long size = G_MEMPOOL_SIZE;
-
-    return size != 0 && addr >= start && addr < start + size;
-}
-
+/**
+ * @brief return the page idx in frame_array for the given addr
+ */
 static unsigned long addr_to_page_idx(unsigned long addr) {
     return (addr - G_MEMPOOL_START) >> PAGE_SHIFT;
 }
 
+/**
+ * @brief return the idx in g_pool for the given size
+ */
 static int find_pool_index(unsigned long size) {
     int i;
 
@@ -80,6 +85,9 @@ static int find_pool_index(unsigned long size) {
     return -1;
 }
 
+/**
+ * @brief Alloc a new page from buddy system and split it into chunks to add them on free list
+ */
 static int expand_chunk_pool(int pool_idx) {
     void *page;
     unsigned long page_addr;
@@ -88,6 +96,7 @@ static int expand_chunk_pool(int pool_idx) {
     unsigned int chunk_cnt;
     unsigned int i;
 
+    // allocate a new page from buddy system
     page = buddy_alloc_pages(0);
     if (!page) {
         return -1;
@@ -98,12 +107,15 @@ static int expand_chunk_pool(int pool_idx) {
     chunk_size = g_pools[pool_idx].chunk_size;
     chunk_cnt = PAGE_SIZE / chunk_size;
 
+    // mark this page as used for chunk pool
     frame_array[page_idx].state = PAGE_STATE_ALLOC_CHUNK_POOL;
     frame_array[page_idx].meta_pool_idx = (signed char)pool_idx;
     frame_array[page_idx].order = 0;
 
+    // directly change the page into chunks
     for (i = 0; i < chunk_cnt; ++i) {
         unsigned long chunk_addr = page_addr + (unsigned long)i * chunk_size;
+        // set each chunk addr as `struct chunk` and add it to free list
         struct chunk *ck = (struct chunk *)chunk_addr;
         list_add(&ck->node, &g_pools[pool_idx].free_list);
     }
@@ -113,32 +125,6 @@ static int expand_chunk_pool(int pool_idx) {
               page_addr,
               chunk_cnt);
     return 0;
-}
-
-static void mark_large_pages(unsigned long head_idx, unsigned int order) {
-    unsigned long count = 1UL << order;
-    unsigned long i;
-
-    frame_array[head_idx].state = PAGE_STATE_ALLOC_PAGE_HEAD;
-    frame_array[head_idx].order = (int)order;
-    frame_array[head_idx].meta_pool_idx = -1;
-
-    for (i = 1; i < count; ++i) {
-        frame_array[head_idx + i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
-        frame_array[head_idx + i].order = -1;
-        frame_array[head_idx + i].meta_pool_idx = -1;
-    }
-}
-
-static void clear_page_meta(unsigned long head_idx, unsigned int order) {
-    unsigned long count = 1UL << order;
-    unsigned long i;
-
-    for (i = 0; i < count; ++i) {
-        // frame_array[head_idx + i].state = PAGE_STATE_FREE_HEAD;
-        // frame_array[head_idx + i].order = -1;
-        frame_array[head_idx + i].meta_pool_idx = -1;
-    }
 }
 
 /**
@@ -398,8 +384,6 @@ void *allocate(unsigned long size) {
         if (!ptr) {
             return 0;
         }
-
-        mark_large_pages(addr_to_page_idx((unsigned long)ptr), order);
         return ptr;
     }
 }
@@ -414,7 +398,7 @@ void free(void *ptr) {
     }
 
     addr = (unsigned long)ptr;
-    if (!addr_in_pool(addr)) {
+    if (!(G_MEMPOOL_SIZE != 0 && addr >= G_MEMPOOL_START && addr < G_MEMPOOL_START + G_MEMPOOL_SIZE)) {
         return;
     }
 
@@ -449,14 +433,10 @@ void free(void *ptr) {
     }
 
     if (state == PAGE_STATE_ALLOC_PAGE_HEAD) {
-        unsigned int order;
-
         if ((addr & (PAGE_SIZE - 1UL)) != 0) {
             return;
         }
 
-        order = (unsigned int)frame_array[page_idx].order;
         buddy_free_pages(ptr);
-        clear_page_meta(page_idx, order);
     }
 }
