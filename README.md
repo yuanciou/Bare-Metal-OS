@@ -21,6 +21,12 @@ make qemu
 .
 ├── bootloader/             // the bootloader code
 ├── lib/
+│   ├── align.c             // alignment 
+│   ├── align.h
+│   ├── endian.c            // bswap
+│   ├── endian.h
+│   ├── buddy.c             // memory buddy system
+│   ├── buddy.h
 │   ├── cpio.c              // the cpio parser for initramfs
 │   ├── cpio.h
 │   ├── fdt.c               // the fdt parser for devicetree  
@@ -36,6 +42,8 @@ make qemu
 │   ├── kernel.its
 │   ├── link.ld
 │   ├── start.S
+│   ├── allocator.c         // memory allocator (chunk pool, startup allocation)
+│   ├── allocator.h
 │   └── uart.c
 ├── initramfs.cpio
 ├── main.c
@@ -55,3 +63,8 @@ make qemu
   - devicetree parsing
   - initial ramdisk
   - bootloader self relocation
+- Memory allocator
+  - startup allocation (find addr for frame array)
+  - reserved memory
+  - buddy system
+  - dynamic memory allocator (chunk < page size)
