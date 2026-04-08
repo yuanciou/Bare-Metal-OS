@@ -54,7 +54,7 @@ static void dynamic_demo_case(void) {
     big = allocate(8000);
     free(big);
 
-    too_big = allocate(BUDDY_MAX_ALLOC_SIZE + 1);
+    too_big = allocate(MAX_ALLOC_SIZE + 1);
     if (!too_big) {
         printf("Allocation failed as expected for size > MAX_ALLOC_SIZE\r\n");
     }

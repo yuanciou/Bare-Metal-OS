@@ -342,32 +342,36 @@ void allocator_dump_pages(void) {
 void *allocate(unsigned long size) {
     int pool_idx;
 
-    if (!g_allocator_ready || size == 0 || size > BUDDY_MAX_ALLOC_SIZE) {
-        if (size > BUDDY_MAX_ALLOC_SIZE) {
+    // wrong allocation
+    if (!g_allocator_ready || size == 0 || size > MAX_ALLOC_SIZE) {
+        if (size > MAX_ALLOC_SIZE) {
             ALLOC_LOG("[Alloc] Reject size %lu (> MAX_ALLOC_SIZE)\r\n", size);
         }
-        return 0;
+        return NULL;
     }
 
+    // for small alloc request, use chunk pool
     if (size <= 2048UL) {
         struct list_head *n;
         struct chunk *ck;
         unsigned int chunk_size;
 
+        // find the pool idx for this size
         pool_idx = find_pool_index(size);
         if (pool_idx < 0) {
-            return 0;
+            return NULL;
         }
 
+        // if the free list is empty, expand a new page from buddy system
         if (list_empty(&g_pools[pool_idx].free_list)) {
             if (expand_chunk_pool(pool_idx) != 0) {
-                return 0;
+                return NULL;
             }
         }
 
-        n = g_pools[pool_idx].free_list.next;
-        list_del(n);
-        ck = list_entry(n, struct chunk, node);
+        n = g_pools[pool_idx].free_list.next; // get the first free chunk
+        list_del(n);    // del from free list
+        ck = list_entry(n, struct chunk, node); // use the node to get the chunk address
         chunk_size = g_pools[pool_idx].chunk_size;
 
         ALLOC_LOG("[Chunk] Allocate 0x%lx at chunk size %u\r\n",
@@ -376,13 +380,14 @@ void *allocate(unsigned long size) {
         return (void *)ck;
     }
 
+    // large alloc request -> buddy system
     {
-        unsigned long pages = (size + PAGE_SIZE - 1) >> PAGE_SHIFT;
-        unsigned int order = roundup_order(pages);
+        unsigned long pages = (size + PAGE_SIZE - 1) >> PAGE_SHIFT; // align the size to #pages
+        unsigned int order = roundup_order(pages); // align the #pages to power of 2
         void *ptr = buddy_alloc_pages(order);
 
         if (!ptr) {
-            return 0;
+            return NULL;
         }
         return ptr;
     }
@@ -398,10 +403,12 @@ void free(void *ptr) {
     }
 
     addr = (unsigned long)ptr;
+    // check valid region
     if (!(G_MEMPOOL_SIZE != 0 && addr >= G_MEMPOOL_START && addr < G_MEMPOOL_START + G_MEMPOOL_SIZE)) {
         return;
     }
 
+    // check the page idx of the addr in frame array 
     page_idx = addr_to_page_idx(addr);
     if (page_idx >= G_MEM_TOTAL_PAGE) {
         return;
@@ -409,9 +416,10 @@ void free(void *ptr) {
 
     state = frame_array[page_idx].state;
 
+    // free a small chunk -> add back to chunk pool free list
     if (state == PAGE_STATE_ALLOC_CHUNK_POOL) {
         int pool_idx = frame_array[page_idx].meta_pool_idx;
-        unsigned long page_base = addr & ~(PAGE_SIZE - 1UL);
+        unsigned long page_base = align_down_ul(addr, PAGE_SIZE);   // align down the addr to its page base address
         unsigned int chunk_size;
         unsigned long offset;
         struct chunk *ck;
@@ -421,11 +429,14 @@ void free(void *ptr) {
         }
 
         chunk_size = g_pools[pool_idx].chunk_size;
+        
+        // check the valid alignment of chunk addr in the page
         offset = addr - page_base;
         if (offset % chunk_size != 0) {
             return;
         }
 
+        // change the ptr to struct chunk and add it back to free list
         ck = (struct chunk *)ptr;
         list_add(&ck->node, &g_pools[pool_idx].free_list);
         ALLOC_LOG("[Chunk] Free 0x%lx at chunk size %u\r\n", addr, chunk_size);
@@ -433,6 +444,7 @@ void free(void *ptr) {
     }
 
     if (state == PAGE_STATE_ALLOC_PAGE_HEAD) {
+        // check the addr is page-align
         if ((addr & (PAGE_SIZE - 1UL)) != 0) {
             return;
         }

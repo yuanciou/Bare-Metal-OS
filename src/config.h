@@ -9,7 +9,7 @@ extern unsigned long uart_base_addr;
 
 // Buddy allocator config (Basic Exercise 1)
 #define BUDDY_MAX_ORDER 10
-#define BUDDY_MAX_ALLOC_SIZE (1UL << 30)
+#define MAX_ALLOC_SIZE 2147483647UL // 2GB
 
 // Dynamic allocator config (Basic Exercise 2)
 #define PAGE_SHIFT 12UL

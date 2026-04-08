@@ -223,7 +223,7 @@ void buddy_init(void) {
     }
 
     buddy_ready = 1;
-    BUDDY_LOG("[Init] Buddy initialized at [0x%lx, 0x%lx), total pages: %u\r\n",
+    BUDDY_LOG("[Init Buddy] Buddy initialized at [0x%lx, 0x%lx), total pages: %u\r\n",
               G_MEMPOOL_START,
               G_MEMPOOL_START + G_MEMPOOL_SIZE,
               (unsigned int)G_MEM_TOTAL_PAGE);
@@ -238,28 +238,32 @@ void *buddy_alloc_pages(unsigned int order) {
         return 0;
     }
 
+    // find the free block >= the requested order
     for (current = order; current <= BUDDY_MAX_ORDER; ++current) {
         if (list_empty(&free_area[current])) {
+            // the cureent order doesn't have free block -> check higher order
             continue;
         }
+        
+        // free block found
+        blk = list_first_entry(&free_area[current], struct frame, node); // use node to get the struct pointer
+        idx = (unsigned long)(blk - frame_array); // since the compiler will auto (/ sizeof(struct frame)) -> the idx
+        remove_free_block(idx, current); // remove from free list
 
-        blk = list_first_entry(&free_area[current], struct frame, node);
-        idx = (unsigned long)(blk - frame_array);
-        remove_free_block(idx, current);
-
+        // split the block until the block order equals to the requested order
         while (current > order) {
             unsigned long buddy_idx;
 
-            current--;
-            buddy_idx = idx + (1UL << current);
+            current--; // less the order
+            buddy_idx = idx + (1UL << current); // the buddy block idx is current idx + block size (1 << current)
             add_free_block(buddy_idx, current);
 
-            BUDDY_LOG("[Split] Release redundant block: page %lu at order %u\r\n",
+            BUDDY_LOG("[Split Buddy] Release redundant block to free list: page %lu at order %u\r\n",
                       buddy_idx, current);
         }
 
         mark_block(idx, order, PAGE_STATE_ALLOC_PAGE_HEAD, PAGE_STATE_ALLOC_PAGE_TAIL);
-        BUDDY_LOG("[Page] Allocate 0x%lx at order %u, page %lu\r\n",
+        BUDDY_LOG("[Page Buddy] Allocate 0x%lx at order %u, page %lu\r\n",
                   page_to_addr(idx),
                   order,
                   idx);
@@ -279,28 +283,39 @@ void buddy_free_pages(void *ptr) {
     }
 
     addr = (unsigned long)ptr;
+    
+    // check valid region
     if (addr < G_MEMPOOL_START || addr >= G_MEMPOOL_START + G_MEMPOOL_SIZE) {
         return;
     }
+
+    // check addr is page-aligned
     if ((addr & (PAGE_SIZE - 1)) != 0) {
         return;
     }
 
     idx = (addr - G_MEMPOOL_START) >> PAGE_SHIFT;
+
+    // the freed page should be the alloc head
     if (idx >= G_MEM_TOTAL_PAGE || frame_array[idx].state != PAGE_STATE_ALLOC_PAGE_HEAD) {
         return;
     }
 
+    // set this block as free
     order = (unsigned int)frame_array[idx].order;
     mark_block(idx, order, PAGE_STATE_FREE_HEAD, PAGE_STATE_FREE_TAIL);
 
+    // try to merge buddy
     while (order < BUDDY_MAX_ORDER) {
+        // since only the order-th bit of the idx will be different of the buddy
         unsigned long buddy_idx = idx ^ (1UL << order);
 
         if (buddy_idx >= G_MEM_TOTAL_PAGE) {
             break;
         }
-        if (frame_array[buddy_idx].state != PAGE_STATE_FREE_HEAD ||
+
+        // the buddy should 1. free  2. have the same size -> can be merge
+        if (frame_array[buddy_idx].state != PAGE_STATE_FREE_HEAD || // not free or not same size
             (unsigned int)frame_array[buddy_idx].order != order) {
             break;
         }
@@ -310,19 +325,24 @@ void buddy_free_pages(void *ptr) {
                   idx,
                   order);
 
+        // get buddy from free list
         remove_free_block(buddy_idx, order);
 
+        // the free head should be the smaller one
         if (buddy_idx < idx) {
             idx = buddy_idx;
         }
 
         order++;
+        
+        // mark the merged block as free and merge iteratively
         mark_block(idx, order, PAGE_STATE_FREE_HEAD, PAGE_STATE_FREE_TAIL);
-        BUDDY_LOG("[Merge] Merge iteratively to order %u at page %lu\r\n", order, idx);
+        BUDDY_LOG("[Merge Buddy] Merge iteratively to order %u at page %lu\r\n", order, idx);
     }
 
+    // add the final merged block to free list
     add_free_block(idx, order);
-    BUDDY_LOG("[Page] Free 0x%lx and add back to order %u, page %lu\r\n",
+    BUDDY_LOG("[Page Buddy] Free 0x%lx and add back to order %u, page %lu\r\n",
               page_to_addr(idx),
               order,
               idx);
