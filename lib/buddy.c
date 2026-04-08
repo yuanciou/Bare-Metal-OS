@@ -95,7 +95,7 @@ static void build_reserved_prefix(void) {
 }
 
 /**
- * @brief Set the memory pool region and clear reserved state
+ * @brief Set the memory pool region (set G_MEMPOOL_START, G_MEMPOOL_SIZE and G_MEM_TOTAL_PAGE)
  *
  * @param start the start address of the memory pool
  * @param size the size of the memory pool

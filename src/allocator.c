@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "../lib/align.h"
 #include "../lib/buddy.h"
 #include "../lib/endian.h"
 #include "../lib/fdt.h"
@@ -228,50 +229,11 @@ void memory_reserve(unsigned long start, unsigned long size) {
     reserved_rgn_count++;
 }
 
-void *startup_alloc(unsigned long size, unsigned long align) {
+void *startup_alloc(const void *fdt, unsigned long align) {
     unsigned long pool_start = G_MEMPOOL_START;
-    unsigned long pool_end = pool_start + G_MEMPOOL_SIZE;
-    unsigned long alloc_start = pool_start;
-    
-    while (1) {
-        unsigned long alloc_end;
-        int overlap = 0;
-        int i;
+    unsigned long pool_size = G_MEMPOOL_SIZE;
 
-        alloc_start = (alloc_start + align - 1) & ~(align - 1);
-        alloc_end = alloc_start + size;
-
-        if (alloc_end > pool_end) {
-            break; // Failed to allocate
-        }
-
-        // Check if [alloc_start, alloc_end) overlaps with any reserved_rgn
-        for (i = 0; i < reserved_rgn_count; ++i) {
-            unsigned long r_start = reserved_rgns[i].start;
-            unsigned long r_end = r_start + reserved_rgns[i].size;
-
-            if (alloc_start < r_end && alloc_end > r_start) {
-                overlap = 1;
-                alloc_start = r_end; // Skip to after this reserved region
-                break;
-            }
-        }
-
-        if (!overlap) {
-            ALLOC_LOG("Reserve frame array\r\n");
-            memory_reserve(alloc_start, size);
-            ALLOC_LOG("----------------------------\r\n");
-            return (void *)alloc_start;
-        }
-    }
-    return 0;
-}
-
-void allocator_init(const void *fdt) {
-    unsigned long pool_start = BUDDY_DEFAULT_POOL_START;
-    unsigned long pool_size = BUDDY_DEFAULT_POOL_SIZE;
-    unsigned int i;
-
+    // Parse the memory pool region from FDT
     if (fdt) {
         int memory_offset = fdt_path_offset(fdt, "/memory");
 
@@ -295,13 +257,58 @@ void allocator_init(const void *fdt) {
         }
     }
 
+    // set `G_MEMPOOL_START`, `G_MEMPOOL_SIZE` and `G_MEM_TOTAL_PAGE`
     buddy_set_region(pool_start, pool_size);
 
+    // set G_MEMPOOL_START, G_MEMPOOL_SIZE and G_MEM_TOTAL_PAGE
     reserve_all_memory(fdt);
 
-    // Dynamic Frame Array size using bump allocator
+    unsigned long pool_end = G_MEMPOOL_START + G_MEMPOOL_SIZE;
+    unsigned long alloc_start = G_MEMPOOL_START; // init alloc start to the pool start
     unsigned long frame_array_size = G_MEM_TOTAL_PAGE * sizeof(struct frame);
-    frame_array = (struct frame *)startup_alloc(frame_array_size, PAGE_SIZE);
+    
+    // find the region for `frame_array` with bump allocator
+    while (1) {
+        unsigned long alloc_end;
+        int overlap = 0;
+        int i;
+
+        alloc_start = align_up_ul(alloc_start, align);
+        alloc_end = alloc_start + frame_array_size;
+
+        if (alloc_end > pool_end) {
+            break; // Failed to allocate
+        }
+
+        // Check if [alloc_start, alloc_end) overlaps with any reserved_rgn
+        for (i = 0; i < reserved_rgn_count; ++i) {
+            unsigned long r_start = reserved_rgns[i].start;
+            unsigned long r_end = r_start + reserved_rgns[i].size;
+
+            if (alloc_start < r_end && alloc_end > r_start) {
+                overlap = 1;
+                alloc_start = r_end; // Skip to after this reserved region
+                break;
+            }
+        }
+
+        // If no overlap and in the memory pool region
+        // -> reserve the region for `frame_array`
+        if (!overlap) {
+            ALLOC_LOG("Reserve frame array\r\n");
+            memory_reserve(alloc_start, frame_array_size);
+            ALLOC_LOG("----------------------------\r\n");
+            return (void *)alloc_start;
+        }
+    }
+    return 0;
+}
+
+void allocator_init(const void *fdt) {
+    unsigned int i;
+
+    // Dynamic Frame Array size using bump allocator
+    frame_array = (struct frame *)startup_alloc(fdt, PAGE_SIZE);
 
     if (!frame_array) {
         ALLOC_LOG("[Panic] Failed to allocate frame_array in startup_alloc.\r\n");
