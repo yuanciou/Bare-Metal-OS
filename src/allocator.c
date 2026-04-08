@@ -130,27 +130,6 @@ static void clear_page_meta(unsigned long head_idx, unsigned int order) {
     }
 }
 
-static void read_cells_from_node(const void *fdt,
-                                 int node_offset,
-                                 unsigned int *addr_cells,
-                                 unsigned int *size_cells) {
-    int len = 0;
-    const void *prop;
-
-    *addr_cells = 2;
-    *size_cells = 2;
-
-    prop = fdt_getprop(fdt, node_offset, "#address-cells", &len);
-    if (prop && len >= 4) {
-        *addr_cells = (unsigned int)bswap32(*(const uint32_t *)prop);
-    }
-
-    prop = fdt_getprop(fdt, node_offset, "#size-cells", &len);
-    if (prop && len >= 4) {
-        *size_cells = (unsigned int)bswap32(*(const uint32_t *)prop);
-    }
-}
-
 /**
  * @brief Reserve the kernel image, DTB blob, initramfs, region in reserved-memory node
  */
@@ -297,26 +276,20 @@ void allocator_init(const void *fdt) {
         int memory_offset = fdt_path_offset(fdt, "/memory");
 
         if (memory_offset >= 0) {
-            unsigned int addr_cells = 2;
-            unsigned int size_cells = 2;
             int len = 0;
             const void *prop;
 
-            read_cells_from_node(fdt, memory_offset, &addr_cells, &size_cells);
             prop = fdt_getprop(fdt, memory_offset, "reg", &len);
             if (prop) {
-                if (addr_cells == 1 && size_cells == 1 && len >= 8) {
-                    pool_start = (unsigned long)bswap32(*(const uint32_t *)prop);
-                    pool_size = (unsigned long)bswap32(*((const uint32_t *)prop + 1));
-                } else if (addr_cells >= 2 && size_cells >= 2 && len >= 16) {
+                if (len >= 16) { // Orange Pi
                     pool_start = (unsigned long)bswap64(*(const uint64_t *)prop);
                     pool_size = (unsigned long)bswap64(*((const uint64_t *)prop + 1));
-                } else if (len >= 16) {
-                    pool_start = (unsigned long)bswap64(*(const uint64_t *)prop);
-                    pool_size = (unsigned long)bswap64(*((const uint64_t *)prop + 1));
-                } else if (len >= 8) {
+                } else if (len >= 8) { // QEMU
                     pool_start = (unsigned long)bswap32(*(const uint32_t *)prop);
                     pool_size = (unsigned long)bswap32(*((const uint32_t *)prop + 1));
+                } else {
+                    pool_start = BUDDY_DEFAULT_POOL_START;
+                    pool_size = BUDDY_DEFAULT_POOL_SIZE;
                 }
             }
         }
