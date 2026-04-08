@@ -14,7 +14,7 @@
 #endif
 
 // g_ -> global variable prefix
-struct frame frame_array[BUDDY_TOTAL_PAGES]; // page frame metadata array for buddy system
+struct frame *frame_array;
 static struct list_head free_area[BUDDY_MAX_ORDER + 1]; // free area list for each order
 
 // prefix sum array for reserved pages
@@ -130,11 +130,6 @@ void buddy_set_region(unsigned long start, unsigned long size) {
         // check the #page upper bound to avoid buffer overflow
         G_MEM_TOTAL_PAGE = BUDDY_TOTAL_PAGES;
     }
-
-    // clear old reserved marks (new reserve flow will mark frame state later)
-    for (i = 0; i < BUDDY_TOTAL_PAGES; ++i) {
-        frame_array[i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
-    }
 }
 
 void buddy_mark_reserved_range(unsigned long start, unsigned long size) {
@@ -179,7 +174,7 @@ void buddy_init(void) {
     unsigned long idx = 0;
     unsigned long i;
 
-    for (i = 0; i < BUDDY_TOTAL_PAGES; ++i) {
+    for (i = 0; i < G_MEM_TOTAL_PAGE; ++i) {
         frame_array[i].order = -1;
         if (frame_array[i].state != PAGE_STATE_RESERVED) {
             frame_array[i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
@@ -289,7 +284,7 @@ void buddy_free_pages(void *ptr) {
     while (order < BUDDY_MAX_ORDER) {
         unsigned long buddy_idx = idx ^ (1UL << order);
 
-        if (buddy_idx >= BUDDY_TOTAL_PAGES) {
+        if (buddy_idx >= G_MEM_TOTAL_PAGE) {
             break;
         }
         if (frame_array[buddy_idx].state != PAGE_STATE_FREE_HEAD ||

@@ -202,6 +202,15 @@ static void reserve_all_memory(const void *fdt) {
     }
 }
 
+struct reserved_region {
+    unsigned long start;
+    unsigned long size;
+};
+
+#define MAX_RESERVED_REGIONS 32
+static struct reserved_region reserved_rgns[MAX_RESERVED_REGIONS];
+static int reserved_rgn_count = 0;
+
 void memory_reserve(unsigned long start, unsigned long size) {
     unsigned long end;
     unsigned long pool_start;
@@ -209,7 +218,7 @@ void memory_reserve(unsigned long start, unsigned long size) {
     unsigned long reserve_start;
     unsigned long reserve_end;
 
-    if (size == 0) {
+    if (size == 0 || reserved_rgn_count >= MAX_RESERVED_REGIONS) {
         return;
     }
 
@@ -234,7 +243,49 @@ void memory_reserve(unsigned long start, unsigned long size) {
               reserve_end,
               (reserve_start - pool_start) >> PAGE_SHIFT,
               (reserve_end - pool_start + PAGE_SIZE - 1UL) >> PAGE_SHIFT);
-    buddy_mark_reserved_range(reserve_start, reserve_end - reserve_start);
+    
+    reserved_rgns[reserved_rgn_count].start = reserve_start;
+    reserved_rgns[reserved_rgn_count].size = reserve_end - reserve_start;
+    reserved_rgn_count++;
+}
+
+void *startup_alloc(unsigned long size, unsigned long align) {
+    unsigned long pool_start = G_MEMPOOL_START;
+    unsigned long pool_end = pool_start + G_MEMPOOL_SIZE;
+    unsigned long alloc_start = pool_start;
+    
+    while (1) {
+        unsigned long alloc_end;
+        int overlap = 0;
+        int i;
+
+        alloc_start = (alloc_start + align - 1) & ~(align - 1);
+        alloc_end = alloc_start + size;
+
+        if (alloc_end > pool_end) {
+            break; // Failed to allocate
+        }
+
+        // Check if [alloc_start, alloc_end) overlaps with any reserved_rgn
+        for (i = 0; i < reserved_rgn_count; ++i) {
+            unsigned long r_start = reserved_rgns[i].start;
+            unsigned long r_end = r_start + reserved_rgns[i].size;
+
+            if (alloc_start < r_end && alloc_end > r_start) {
+                overlap = 1;
+                alloc_start = r_end; // Skip to after this reserved region
+                break;
+            }
+        }
+
+        if (!overlap) {
+            ALLOC_LOG("Reserve frame array\r\n");
+            memory_reserve(alloc_start, size);
+            ALLOC_LOG("----------------------------\r\n");
+            return (void *)alloc_start;
+        }
+    }
+    return 0;
 }
 
 void allocator_init(const void *fdt) {
@@ -275,6 +326,27 @@ void allocator_init(const void *fdt) {
 
     reserve_all_memory(fdt);
 
+    // Dynamic Frame Array size using bump allocator
+    unsigned long frame_array_size = G_MEM_TOTAL_PAGE * sizeof(struct frame);
+    frame_array = (struct frame *)startup_alloc(frame_array_size, PAGE_SIZE);
+
+    if (!frame_array) {
+        ALLOC_LOG("[Panic] Failed to allocate frame_array in startup_alloc.\r\n");
+        return;
+    }
+
+    for (i = 0; i < G_MEM_TOTAL_PAGE; ++i) {
+        frame_array[i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
+        frame_array[i].order = -1;
+        frame_array[i].meta_pool_idx = -1;
+    }
+
+    // Now that frame array is created, we can tell buddy to mark pages
+    // as reserved
+    for (i = 0; i < reserved_rgn_count; ++i) {
+        buddy_mark_reserved_range(reserved_rgns[i].start, reserved_rgns[i].size);
+    }
+
     buddy_init();
 
     for (i = 0; i < CHUNK_POOL_COUNT; ++i) {
@@ -282,7 +354,7 @@ void allocator_init(const void *fdt) {
         INIT_LIST_HEAD(&g_pools[i].free_list);
     }
 
-    for (i = 0; i < BUDDY_TOTAL_PAGES; ++i) {
+    for (i = 0; i < G_MEM_TOTAL_PAGE; ++i) {
         frame_array[i].meta_pool_idx = -1;
     }
 
@@ -361,7 +433,7 @@ void free(void *ptr) {
     }
 
     page_idx = addr_to_page_idx(addr);
-    if (page_idx >= BUDDY_TOTAL_PAGES) {
+    if (page_idx >= G_MEM_TOTAL_PAGE) {
         return;
     }
 

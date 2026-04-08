@@ -25,7 +25,7 @@ struct frame {
     signed char meta_pool_idx;
 };
 
-extern struct frame frame_array[BUDDY_TOTAL_PAGES];
+extern struct frame *frame_array;
 
 extern unsigned long G_MEMPOOL_START;
 extern unsigned long G_MEMPOOL_SIZE;
