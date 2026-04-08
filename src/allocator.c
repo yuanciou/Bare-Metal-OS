@@ -37,6 +37,16 @@ static const unsigned int g_pool_sizes[CHUNK_POOL_COUNT] = {
 static struct chunk_pool g_pools[CHUNK_POOL_COUNT];
 static int g_allocator_ready;
 
+// for startup memory reservation
+struct reserved_region {
+    unsigned long start;
+    unsigned long size;
+};
+
+#define MAX_RESERVED_REGIONS 32
+static struct reserved_region reserved_rgns[MAX_RESERVED_REGIONS];
+static int reserved_rgn_count = 0;
+
 static unsigned long roundup_order(unsigned long pages) {
     unsigned int order = 0;
     unsigned long n = 1;
@@ -182,15 +192,9 @@ static void reserve_all_memory(const void *fdt) {
     }
 }
 
-struct reserved_region {
-    unsigned long start;
-    unsigned long size;
-};
-
-#define MAX_RESERVED_REGIONS 32
-static struct reserved_region reserved_rgns[MAX_RESERVED_REGIONS];
-static int reserved_rgn_count = 0;
-
+/**
+ * @brief Save the reserved region for startup memory reservation in `reserved_rgns`
+ */
 void memory_reserve(unsigned long start, unsigned long size) {
     unsigned long end;
     unsigned long pool_start;
@@ -206,6 +210,7 @@ void memory_reserve(unsigned long start, unsigned long size) {
     pool_start = G_MEMPOOL_START;
     pool_end = pool_start + G_MEMPOOL_SIZE;
 
+    // skip the region that is out of memory pool
     if (end <= pool_start || start >= pool_end) {
         ALLOC_LOG("[Reserve] Skip address [0x%lx, 0x%lx): out of pool [0x%lx, 0x%lx)\r\n",
                   start,
@@ -215,6 +220,7 @@ void memory_reserve(unsigned long start, unsigned long size) {
         return;
     }
 
+    // only handle the region in the memory pool
     reserve_start = start < pool_start ? pool_start : start;
     reserve_end = end > pool_end ? pool_end : end;
 
@@ -229,7 +235,12 @@ void memory_reserve(unsigned long start, unsigned long size) {
     reserved_rgn_count++;
 }
 
-void *startup_alloc(const void *fdt, unsigned long align) {
+/**
+ * @brief The startup allocation to reserved memory and
+ *        find a region for `frame_array` with bump allocator
+ * @param fdt the pointer to the FDT blob
+ */
+void *startup_alloc(const void *fdt) {
     unsigned long pool_start = G_MEMPOOL_START;
     unsigned long pool_size = G_MEMPOOL_SIZE;
 
@@ -273,7 +284,7 @@ void *startup_alloc(const void *fdt, unsigned long align) {
         int overlap = 0;
         int i;
 
-        alloc_start = align_up_ul(alloc_start, align);
+        alloc_start = align_up_ul(alloc_start, PAGE_SIZE);
         alloc_end = alloc_start + frame_array_size;
 
         if (alloc_end > pool_end) {
@@ -304,43 +315,38 @@ void *startup_alloc(const void *fdt, unsigned long align) {
     return 0;
 }
 
+/**
+ * @brief call startup allocation, init buddy sytem and init chunk pools
+ */
 void allocator_init(const void *fdt) {
     unsigned int i;
 
     // Dynamic Frame Array size using bump allocator
-    frame_array = (struct frame *)startup_alloc(fdt, PAGE_SIZE);
+    frame_array = (struct frame *)startup_alloc(fdt);
 
     if (!frame_array) {
         ALLOC_LOG("[Panic] Failed to allocate frame_array in startup_alloc.\r\n");
         return;
     }
 
-    for (i = 0; i < G_MEM_TOTAL_PAGE; ++i) {
-        frame_array[i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
-        frame_array[i].order = -1;
-        frame_array[i].meta_pool_idx = -1;
-    }
-
-    // Now that frame array is created, we can tell buddy to mark pages
-    // as reserved
+    // Now that frame array is created, we can tell buddy to mark pages as reserved
+    // since `reserved_rgns` is a local array, so we do this here
     for (i = 0; i < reserved_rgn_count; ++i) {
         buddy_mark_reserved_range(reserved_rgns[i].start, reserved_rgns[i].size);
     }
 
+    // init the buddy system
     buddy_init();
 
+    // init the chunk pools
     for (i = 0; i < CHUNK_POOL_COUNT; ++i) {
         g_pools[i].chunk_size = g_pool_sizes[i];
         INIT_LIST_HEAD(&g_pools[i].free_list);
     }
 
-    for (i = 0; i < G_MEM_TOTAL_PAGE; ++i) {
-        frame_array[i].meta_pool_idx = -1;
-    }
-
     g_allocator_ready = 1;
     ALLOC_LOG("[Init] Dynamic allocator ready. Small alloc <= %u bytes\r\n",
-              (unsigned int)SMALL_ALLOC_LIMIT);
+              (unsigned int)2048UL);
 }
 
 void allocator_dump_pages(void) {
@@ -357,7 +363,7 @@ void *allocate(unsigned long size) {
         return 0;
     }
 
-    if (size <= SMALL_ALLOC_LIMIT) {
+    if (size <= 2048UL) {
         struct list_head *n;
         struct chunk *ck;
         unsigned int chunk_size;

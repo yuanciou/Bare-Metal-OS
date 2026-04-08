@@ -14,7 +14,6 @@ extern unsigned long uart_base_addr;
 // Dynamic allocator config (Basic Exercise 2)
 #define PAGE_SHIFT 12UL
 #define PAGE_SIZE (1UL << PAGE_SHIFT)
-#define SMALL_ALLOC_LIMIT 2048UL
 
 // Buddy allocator runtime layout support
 #define BUDDY_MAX_POOL_SIZE (2UL * 1024UL * 1024UL * 1024UL)
