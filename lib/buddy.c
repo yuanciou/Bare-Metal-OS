@@ -182,6 +182,7 @@ void buddy_init(void) {
             frame_array[i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
         }
         frame_array[i].meta_pool_idx = -1;
+        frame_array[i].ref_count = 0;
         
         // init the list head
         INIT_LIST_HEAD(&frame_array[i].node);

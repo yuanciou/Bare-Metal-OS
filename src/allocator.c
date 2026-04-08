@@ -111,6 +111,7 @@ static int expand_chunk_pool(int pool_idx) {
     frame_array[page_idx].state = PAGE_STATE_ALLOC_CHUNK_POOL;
     frame_array[page_idx].meta_pool_idx = (signed char)pool_idx;
     frame_array[page_idx].order = 0;
+    frame_array[page_idx].ref_count = 0;
 
     // directly change the page into chunks
     for (i = 0; i < chunk_cnt; ++i) {
@@ -374,6 +375,8 @@ void *allocate(unsigned long size) {
         ck = list_entry(n, struct chunk, node); // use the node to get the chunk address
         chunk_size = g_pools[pool_idx].chunk_size;
 
+        frame_array[addr_to_page_idx((unsigned long)ck)].ref_count++;
+
         ALLOC_LOG("[Chunk] Allocate 0x%lx at chunk size %u\r\n",
                   (unsigned long)ck,
                   chunk_size);
@@ -439,7 +442,31 @@ void free(void *ptr) {
         // change the ptr to struct chunk and add it back to free list
         ck = (struct chunk *)ptr;
         list_add(&ck->node, &g_pools[pool_idx].free_list);
-        ALLOC_LOG("[Chunk] Free 0x%lx at chunk size %u\r\n", addr, chunk_size);
+        
+        frame_array[page_idx].ref_count--;
+
+        // return back to buddy system if all chunks in this page are freed
+        if (frame_array[page_idx].ref_count == 0) {
+            struct list_head *pos, *q;
+            
+            // Remove all chunks belonging to this page from the free list
+            pos = g_pools[pool_idx].free_list.next;
+            while (pos != &g_pools[pool_idx].free_list) {
+                q = pos->next;
+                unsigned long node_addr = (unsigned long)list_entry(pos, struct chunk, node);
+                if (node_addr >= page_base && node_addr < page_base + PAGE_SIZE) {
+                    list_del(pos);
+                }
+                pos = q;
+            }
+            
+            // Return page to buddy system
+            frame_array[page_idx].state = PAGE_STATE_ALLOC_PAGE_HEAD;
+            buddy_free_pages((void *)page_base);
+            ALLOC_LOG("[Chunk] Page 0x%lx all chunks freed, return to buddy system\r\n", page_base);
+        } else {
+            ALLOC_LOG("[Chunk] Free 0x%lx at chunk size %u\r\n", addr, chunk_size);
+        }
         return;
     }
 
