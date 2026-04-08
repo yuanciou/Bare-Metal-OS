@@ -9,57 +9,57 @@
 extern char uart_getc(void);
 extern char uart_getc_raw(void);
 extern void uart_putc(char c);
+extern void uart_puts(const char* s);
 extern void uart_hex(unsigned long h);
 
-static void buddy_demo_case(void) {
-    void *p1;
-    void *p2;
-    void *p3;
-
-    printf("[Demo] buddy alloc/free start\r\n");
-    p1 = allocate(4000);
-    p2 = allocate(8000);
-    p3 = allocate(4000);
-
-    allocator_dump_pages();
-
-    free(p1);
-    free(p2);
-    free(p3);
-
-    allocator_dump_pages();
-    printf("[Demo] buddy alloc/free end\r\n");
-}
-
-static void dynamic_demo_case(void) {
-    void *ptr1;
-    void *ptr2;
-    void *ptr3;
-    void *ptr4;
-    void *big;
-    void *too_big;
-
-    printf("[Demo] dynamic allocator start\r\n");
-
-    ptr1 = allocate(16);
-    ptr2 = allocate(32);
-    ptr3 = allocate(64);
-    ptr4 = allocate(128);
+static void mem_alloc_demo(void) {
+    uart_puts("Testing memory allocation...\n");
+    char *ptr1 = (char *)allocate(4000);
+    char *ptr2 = (char *)allocate(8000);
+    char *ptr3 = (char *)allocate(4000);
+    char *ptr4 = (char *)allocate(4000);
 
     free(ptr1);
     free(ptr2);
     free(ptr3);
     free(ptr4);
 
-    big = allocate(8000);
-    free(big);
+    /* Test kmalloc */
+    uart_puts("Testing dynamic allocator...\n");
+    char *kmem_ptr1 = (char *)allocate(16);
+    char *kmem_ptr2 = (char *)allocate(32);
+    char *kmem_ptr3 = (char *)allocate(64);
+    char *kmem_ptr4 = (char *)allocate(128);
 
-    too_big = allocate(MAX_ALLOC_SIZE + 1);
-    if (!too_big) {
-        printf("Allocation failed as expected for size > MAX_ALLOC_SIZE\r\n");
+    free(kmem_ptr1);
+    free(kmem_ptr2);
+    free(kmem_ptr3);
+    free(kmem_ptr4);
+
+    char *kmem_ptr5 = (char *)allocate(16);
+    char *kmem_ptr6 = (char *)allocate(32);
+
+    free(kmem_ptr5);
+    free(kmem_ptr6);
+
+    // Test allocate new page if the cache is not enough
+    void *kmem_ptr[102];
+    for (int i=0; i<100; i++) {
+        kmem_ptr[i] = (char *)allocate(128);
+    }
+    for (int i=0; i<100; i++) {
+        free(kmem_ptr[i]);
     }
 
-    printf("[Demo] dynamic allocator end\r\n");
+    // Test exceeding the maximum size
+    char *kmem_ptr7 = (char *)allocate(MAX_ALLOC_SIZE + 1);
+    if (kmem_ptr7 == NULL) {
+        uart_puts("Allocation failed as expected for size > MAX_ALLOC_SIZE\n");
+    }
+    else {
+        uart_puts("Unexpected allocation success for size > MAX_ALLOC_SIZE\n");
+        free(kmem_ptr7);
+    }
 }
 
 void run_shell(unsigned long hartid, const void *fdt) {
@@ -94,8 +94,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
             printf("  info - print system info.\r\n");
             printf("  ls - list files in initramfs.\r\n");
             printf("  cat [file] - print file content in initramfs.\r\n");
-            printf("  buddy - run buddy allocator demo case.\r\n");
-            printf("  alloc - run dynamic allocator demo case.\r\n");
+            printf("  alloc-demo - run dynamic allocator demo case.\r\n");
         } else if (strcmp(buffer, "hello") == 0) {
             printf("Hello world.\r\n");
         } else if (strcmp(buffer, "info") == 0) {
@@ -125,10 +124,8 @@ void run_shell(unsigned long hartid, const void *fdt) {
             } else {
                 printf("Usage: cat [file]\r\n");
             }
-        } else if (strcmp(buffer, "buddy") == 0) {
-            buddy_demo_case();
-        } else if (strcmp(buffer, "alloc") == 0) {
-            dynamic_demo_case();
+        } else if (strcmp(buffer, "alloc-demo") == 0) {
+            mem_alloc_demo();
         } else {
             printf("Unknown command: ");
             printf(buffer);

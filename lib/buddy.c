@@ -267,6 +267,8 @@ void *buddy_alloc_pages(unsigned int order) {
                   page_to_addr(idx),
                   order,
                   idx);
+        BUDDY_LOG("[Alloc Buddy] Free blocks per order:\r\n");
+        buddy_dump_free_areas();
         return (void *)page_to_addr(idx);
     }
 
@@ -346,6 +348,8 @@ void buddy_free_pages(void *ptr) {
               page_to_addr(idx),
               order,
               idx);
+    BUDDY_LOG("[Free Buddy] Free blocks per order:\r\n");
+    buddy_dump_free_areas();
 }
 
 void buddy_dump_free_areas(void) {
@@ -357,6 +361,6 @@ void buddy_dump_free_areas(void) {
         for (it = free_area[i].next; it != &free_area[i]; it = it->next) {
             count++;
         }
-        printf("free_area[%u] = %u\r\n", i, count);
+        BUDDY_LOG("free_area[%u] = %u\r\n", i, count);
     }
 }
