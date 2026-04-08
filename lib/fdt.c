@@ -266,6 +266,9 @@ static unsigned long parse_addr_prop(const void *prop, int len) {
     return 0;
 }
 
+/**
+ * @brief Parse the addr property in /chosen node.
+ */
 static unsigned long get_chosen_addr_prop(const void *fdt,
                                           const char *name,
                                           const char *fallback_name) {
@@ -290,6 +293,9 @@ static unsigned long get_chosen_addr_prop(const void *fdt,
     return parse_addr_prop(prop, len);
 }
 
+/**
+ * @brief Get the start addr of initial ramdisk in /chosen node.
+ */
 unsigned long get_initrd_start(const void *fdt) {
     return get_chosen_addr_prop(fdt, "linux,initrd-start", "initrd-start");
 }
@@ -298,58 +304,30 @@ unsigned long get_initrd_end(const void *fdt) {
     return get_chosen_addr_prop(fdt, "linux,initrd-end", "initrd-end");
 }
 
-static void read_cells_from_node(const void *fdt,
-                                 int node_offset,
-                                 unsigned int *addr_cells,
-                                 unsigned int *size_cells) {
-    int len = 0;
-    const void *prop;
+/**
+ * @brief Parse the type define as `prop = <start size>` in the FDT>
+    Example: reg = <0x00 0xc0800000 0x00 0x40000>;
+    Example: alloc-ranges = <0x00 0x40000000 0x00 0x30000000>;
 
-    *addr_cells = 2;
-    *size_cells = 2;
-
-    prop = fdt_getprop(fdt, node_offset, "#address-cells", &len);
-    if (prop && len >= 4) {
-        *addr_cells = (unsigned int)bswap32(*(const uint32_t *)prop);
-    }
-
-    prop = fdt_getprop(fdt, node_offset, "#size-cells", &len);
-    if (prop && len >= 4) {
-        *size_cells = (unsigned int)bswap32(*(const uint32_t *)prop);
-    }
-}
-
-static int parse_first_reg_range(const void *reg_prop,
+ *
+ * @param start the start address to be returned
+ * @param size the size to be returned
+ */
+static int parse_start_and_size(const void *reg_prop,
                                  int len,
-                                 unsigned int addr_cells,
-                                 unsigned int size_cells,
                                  unsigned long *start,
                                  unsigned long *size) {
-    unsigned int tuple_bytes = (addr_cells + size_cells) * 4U;
-
     if (!reg_prop || len <= 0) {
         return -1;
     }
 
-    if (tuple_bytes == 8U && len >= 8) {
-        *start = (unsigned long)bswap32(*(const uint32_t *)reg_prop);
-        *size = (unsigned long)bswap32(*((const uint32_t *)reg_prop + 1));
-        return 0;
-    }
-
-    if (tuple_bytes == 16U && len >= 16) {
+    if (len >= 16) { // 64-bit -> Orange Pi
         *start = (unsigned long)bswap64(*(const uint64_t *)reg_prop);
         *size = (unsigned long)bswap64(*((const uint64_t *)reg_prop + 1));
         return 0;
     }
 
-    if (len >= 16) {
-        *start = (unsigned long)bswap64(*(const uint64_t *)reg_prop);
-        *size = (unsigned long)bswap64(*((const uint64_t *)reg_prop + 1));
-        return 0;
-    }
-
-    if (len >= 8) {
+    if (len >= 8) { // 32-bit -> QEMU
         *start = (unsigned long)bswap32(*(const uint32_t *)reg_prop);
         *size = (unsigned long)bswap32(*((const uint32_t *)reg_prop + 1));
         return 0;
@@ -358,58 +336,52 @@ static int parse_first_reg_range(const void *reg_prop,
     return -1;
 }
 
-static int parse_size_value(const void *size_prop,
-                            int len,
-                            unsigned int size_cells,
-                            unsigned long *size) {
-    if (!size_prop || len <= 0 || !size) {
-        return -1;
-    }
-
-    if (size_cells == 1 && len >= 4) {
-        *size = (unsigned long)bswap32(*(const uint32_t *)size_prop);
-        return 0;
-    }
-
-    if (size_cells >= 2 && len >= 8) {
-        *size = (unsigned long)bswap64(*(const uint64_t *)size_prop);
-        return 0;
-    }
-
-    if (len >= 8) {
-        *size = (unsigned long)bswap64(*(const uint64_t *)size_prop);
-        return 0;
-    }
-
-    if (len >= 4) {
-        *size = (unsigned long)bswap32(*(const uint32_t *)size_prop);
-        return 0;
-    }
-
-    return -1;
-}
-
+/**
+ * @brief Parse the type define as `alloc-ranges` and `size` in the FDT.
+    Example: 
+        linux,cma {
+                compatible = "shared-dma-pool";
+                alloc-ranges = <0x00 0x40000000 0x00 0x30000000>;
+                size = <0x00 0x18000000>;
+                alignment = <0x00 0x100000>;
+                linux,cma-default;
+                reusable;
+            };
+ *
+ * @param alloc_ranges_prop the pointer to the `alloc-ranges` property value
+ * @param alloc_ranges_len the length of the `alloc-ranges` property value
+ * @param size_prop the pointer to the `size` property value
+ * @param size_len the length of the `size` property value
+ * @param start the start addr to be returned
+ * @param size the size to be returned
+ */
 static int parse_alloc_ranges_with_size(const void *alloc_ranges_prop,
                                         int alloc_ranges_len,
                                         const void *size_prop,
                                         int size_len,
-                                        unsigned int addr_cells,
-                                        unsigned int size_cells,
                                         unsigned long *start,
                                         unsigned long *size) {
-    unsigned long range_size = 0;
-    unsigned long requested_size = 0;
+    unsigned long range_size = 0;   // the size defined in alloc-ranges, which is the upper bound of the reserved region
+    unsigned long requested_size = 0;   // the size defined in size property, which is the requested reserved size
 
-    if (parse_first_reg_range(alloc_ranges_prop,
+    // parse the alloc-ranges to get the start addr and the range size
+    if (parse_start_and_size(alloc_ranges_prop,
                               alloc_ranges_len,
-                              addr_cells,
-                              size_cells,
                               start,
                               &range_size) != 0) {
         return -1;
     }
 
-    if (parse_size_value(size_prop, size_len, size_cells, &requested_size) != 0) {
+    // parse the size property to get the requested reserved size
+    if (!size_prop || size_len <= 0) {
+        return -1;
+    }
+
+    if (size_len >= 8) {
+        requested_size = (unsigned long)bswap64(*(const uint64_t *)size_prop);
+    } else if (size_len >= 4) {
+        requested_size = (unsigned long)bswap32(*(const uint32_t *)size_prop);
+    } else {
         return -1;
     }
 
@@ -417,6 +389,7 @@ static int parse_alloc_ranges_with_size(const void *alloc_ranges_prop,
         return -1;
     }
 
+    // if request > range -> use range size
     if (range_size != 0 && requested_size > range_size) {
         requested_size = range_size;
     }
@@ -425,12 +398,18 @@ static int parse_alloc_ranges_with_size(const void *alloc_ranges_prop,
     return 0;
 }
 
+/**
+ * @brief Parse the reserved memory regions in `reserved-memory` node
+ *
+ * @param fdt the pointer to the FDT blob
+ * @param index the index of the reserved region to be parsed (0-based) -> check not return the same one
+ * @param start the pointer to store the start address of the reserved region
+ * @param size the pointer to store the size of the reserved region
+ */
 int fdt_get_reserved_memory_region(const void *fdt,
                                    int index,
                                    unsigned long *start,
                                    unsigned long *size) {
-    unsigned int addr_cells = 2;
-    unsigned int size_cells = 2;
     int reserved_offset;
     const char *struct_ptr;
     int depth = 1;
@@ -446,45 +425,49 @@ int fdt_get_reserved_memory_region(const void *fdt,
         return -1;
     }
 
+    // find the `reserved-memory` node
     reserved_offset = fdt_path_offset(fdt, "/reserved-memory");
     if (reserved_offset < 0) {
         return -1;
     }
 
-    read_cells_from_node(fdt, reserved_offset, &addr_cells, &size_cells);
-
+    // check if the reserved-memory node itself has the reg property
     reg_prop = fdt_getprop(fdt, reserved_offset, "reg", &len);
-    if (parse_first_reg_range(reg_prop, len, addr_cells, size_cells, start, size) == 0) {
+    if (parse_start_and_size(reg_prop, len, start, size) == 0) { // success
         if (current == index) {
             return 0;
         }
         current++;
     }
 
+    // in the reserved-memory node
     struct_ptr = (const char *)fdt + reserved_offset;
     if (bswap32(*(const uint32_t *)struct_ptr) != FDT_BEGIN_NODE) {
         return -1;
     }
 
-    struct_ptr += 4;
-    struct_ptr = align_up_ptr(struct_ptr + strlen(struct_ptr) + 1, 4);
+    // move through the token and the node name to reach the first child node
+    struct_ptr += 4; // skip the FDT_BEGIN_NODE token
+    struct_ptr = align_up_ptr(struct_ptr + strlen(struct_ptr) + 1, 4); // skip the node name and align to 4 bytes
 
-    while (depth > 0) {
+    while (depth > 0) { // when depth == 0 -> leave the reserved-memory node
         const char *token_ptr = struct_ptr;
         uint32_t token = bswap32(*(const uint32_t *)token_ptr);
 
-        struct_ptr += 4;
+        struct_ptr += 4; // the token is 4 bytes
 
         if (token == FDT_BEGIN_NODE) {
+            // move througn the node name and depth++ to enter the child node
             int child_offset = (int)(token_ptr - (const char *)fdt);
             const char *child_name = struct_ptr;
 
             struct_ptr = align_up_ptr(struct_ptr + strlen(child_name) + 1, 4);
             depth++;
 
-            if (depth == 2) {
+            if (depth == 2) { // the child node of reserved-memory node, which defines a reserved region
+                // the `reg = <start size>` type
                 reg_prop = fdt_getprop(fdt, child_offset, "reg", &len);
-                if (parse_first_reg_range(reg_prop, len, addr_cells, size_cells, start, size) == 0) {
+                if (parse_start_and_size(reg_prop, len, start, size) == 0) {
                     if (current == index) {
                         return 0;
                     }
@@ -492,6 +475,7 @@ int fdt_get_reserved_memory_region(const void *fdt,
                     continue;
                 }
 
+                // the `alloc-ranges` and `size` type
                 alloc_ranges_prop = fdt_getprop(fdt,
                                                 child_offset,
                                                 "alloc-ranges",
@@ -501,8 +485,6 @@ int fdt_get_reserved_memory_region(const void *fdt,
                                                 alloc_ranges_len,
                                                 size_prop,
                                                 size_len,
-                                                addr_cells,
-                                                size_cells,
                                                 start,
                                                 size) == 0) {
                     if (current == index) {
@@ -512,12 +494,14 @@ int fdt_get_reserved_memory_region(const void *fdt,
                 }
             }
         } else if (token == FDT_END_NODE) {
+            // depth-- to leave the current node
             depth--;
         } else if (token == FDT_PROP) {
+            // skip the property (len + nameoff + value) to reach the next token
             uint32_t prop_len = bswap32(((const uint32_t *)struct_ptr)[0]);
 
-            struct_ptr += 8;
-            struct_ptr = align_up_ptr(struct_ptr + prop_len, 4);
+            struct_ptr += 8; // skip the len and nameoff
+            struct_ptr = align_up_ptr(struct_ptr + prop_len, 4); // skip the property value and align to 4 bytes
         } else if (token == FDT_NOP) {
             continue;
         } else if (token == FDT_END) {

@@ -151,55 +151,54 @@ static void read_cells_from_node(const void *fdt,
     }
 }
 
-static void reserve_dtb_blob(const void *fdt) {
+/**
+ * @brief Reserve the kernel image, DTB blob, initramfs, region in reserved-memory node
+ */
+static void reserve_all_memory(const void *fdt) {
     unsigned long dtb_size;
-
-    if (!fdt) {
-        return;
-    }
-
-    dtb_size = fdt_totalsize(fdt);
-    if (dtb_size != 0) {
-        ALLOC_LOG("Reserve DTB:\r\n");
-        memory_reserve((unsigned long)fdt, dtb_size);
-        ALLOC_LOG("----------------------------\r\n");
-    }
-}
-
-static void reserve_kernel_image(void) {
-    ALLOC_LOG("Reserve kernel image:\r\n");
-    memory_reserve((unsigned long)&_start, (unsigned long)(&_end - &_start));
-    ALLOC_LOG("----------------------------\r\n");
-}
-
-static void reserve_initramfs(const void *fdt) {
     unsigned long initrd_start;
     unsigned long initrd_end;
-
-    if (!fdt) {
-        return;
-    }
-
-    initrd_start = get_initrd_start(fdt);
-    initrd_end = get_initrd_end(fdt);
-
-    if (initrd_start && initrd_end > initrd_start) {
-        ALLOC_LOG("Reserve initramfs:\r\n");
-        memory_reserve(initrd_start, initrd_end - initrd_start);
-        ALLOC_LOG("----------------------------\r\n");
-    }
-}
-
-static void reserve_reserved_memory_ranges(const void *fdt) {
-    int idx = 0;
+    int idx;
     unsigned long start;
     unsigned long size;
 
-    while (fdt_get_reserved_memory_region(fdt, idx, &start, &size) == 0) {
-        ALLOC_LOG("Reserve reserved memory %d:\r\n", idx);
-        memory_reserve(start, size);
-        ALLOC_LOG("----------------------------\r\n");
-        idx++;
+    // Reserve kernel image
+        // _start and _end are defined in the linker script
+    ALLOC_LOG("----------------------------\r\n");
+    ALLOC_LOG("Reserve kernel image:\r\n");
+    memory_reserve((unsigned long)&_start, (unsigned long)(&_end - &_start));
+    ALLOC_LOG("----------------------------\r\n");
+
+    if (fdt) {
+        // Reserve DTB blob
+            // start addr is pointer `fdt`
+            // dtb_size is from the FDT header filed `totalsize`
+        dtb_size = fdt_totalsize(fdt);
+        if (dtb_size != 0) {
+            ALLOC_LOG("Reserve DTB:\r\n");
+            memory_reserve((unsigned long)fdt, dtb_size);
+            ALLOC_LOG("----------------------------\r\n");
+        }
+
+        // Reserve initramfs
+            // from the /chosen node in FDT
+        initrd_start = get_initrd_start(fdt);
+        initrd_end = get_initrd_end(fdt);
+        if (initrd_start && initrd_end > initrd_start) {
+            ALLOC_LOG("Reserve initramfs:\r\n");
+            memory_reserve(initrd_start, initrd_end - initrd_start);
+            ALLOC_LOG("----------------------------\r\n");
+        }
+
+        // Reserve reserved memory ranges
+            // from all region in `reserved-memory` node in FDT
+        idx = 0;  // idx++ to avoid always return the first region in `reserved-memory` node
+        while (fdt_get_reserved_memory_region(fdt, idx, &start, &size) == 0) {
+            ALLOC_LOG("Reserve reserved memory %d:\r\n", idx);
+            memory_reserve(start, size);
+            ALLOC_LOG("----------------------------\r\n");
+            idx++;
+        }
     }
 }
 
@@ -274,12 +273,7 @@ void allocator_init(const void *fdt) {
 
     buddy_set_region(pool_start, pool_size);
 
-    reserve_kernel_image();
-    if (fdt) {
-        reserve_dtb_blob(fdt);
-        reserve_initramfs(fdt);
-        reserve_reserved_memory_ranges(fdt);
-    }
+    reserve_all_memory(fdt);
 
     buddy_init();
 

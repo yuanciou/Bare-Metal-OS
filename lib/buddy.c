@@ -16,9 +16,8 @@
 // g_ -> global variable prefix
 struct frame frame_array[BUDDY_TOTAL_PAGES]; // page frame metadata array for buddy system
 static struct list_head free_area[BUDDY_MAX_ORDER + 1]; // free area list for each order
-static unsigned char reserved_map[BUDDY_TOTAL_PAGES]; // bitmap to track reserved pages during startup allocation, 1: reserved; 0: free
 
-// prefix sum array for reserved_map
+// prefix sum array for reserved pages
 // if reserved_prefix[end] - reserved_prefix[start] > 0 -> there exist reserved pages -> find quickly 
 static unsigned int reserved_prefix[BUDDY_TOTAL_PAGES + 1];
 unsigned long G_MEMPOOL_START = BUDDY_DEFAULT_POOL_START; // memory pool start address
@@ -90,12 +89,13 @@ static void build_reserved_prefix(void) {
 
     reserved_prefix[0] = 0;
     for (i = 0; i < G_MEM_TOTAL_PAGE; ++i) {
-        reserved_prefix[i + 1] = reserved_prefix[i] + (reserved_map[i] ? 1U : 0U);
+        reserved_prefix[i + 1] = reserved_prefix[i] +
+                                 (frame_array[i].state == PAGE_STATE_RESERVED ? 1U : 0U);
     }
 }
 
 /**
- * @brief Set the memory pool region and init the reserved_map
+ * @brief Set the memory pool region and clear reserved state
  *
  * @param start the start address of the memory pool
  * @param size the size of the memory pool
@@ -131,9 +131,9 @@ void buddy_set_region(unsigned long start, unsigned long size) {
         G_MEM_TOTAL_PAGE = BUDDY_TOTAL_PAGES;
     }
 
-    // init the reserved_map (find reserved will be called later)
+    // clear old reserved marks (new reserve flow will mark frame state later)
     for (i = 0; i < BUDDY_TOTAL_PAGES; ++i) {
-        reserved_map[i] = 0;
+        frame_array[i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
     }
 }
 
@@ -171,7 +171,7 @@ void buddy_mark_reserved_range(unsigned long start, unsigned long size) {
     }
 
     for (i = page_start; i < page_end; ++i) {
-        reserved_map[i] = 1;
+        frame_array[i].state = PAGE_STATE_RESERVED;
     }
 }
 
@@ -181,7 +181,9 @@ void buddy_init(void) {
 
     for (i = 0; i < BUDDY_TOTAL_PAGES; ++i) {
         frame_array[i].order = -1;
-        frame_array[i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
+        if (frame_array[i].state != PAGE_STATE_RESERVED) {
+            frame_array[i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
+        }
         frame_array[i].meta_pool_idx = -1;
         INIT_LIST_HEAD(&frame_array[i].node);
     }
@@ -193,8 +195,8 @@ void buddy_init(void) {
     build_reserved_prefix();
 
     while (idx < G_MEM_TOTAL_PAGE) {
-        if (reserved_map[idx]) {
-            mark_block(idx, 0, PAGE_STATE_ALLOC_PAGE_HEAD, PAGE_STATE_ALLOC_PAGE_TAIL);
+        if (frame_array[idx].state == PAGE_STATE_RESERVED) {
+            frame_array[idx].order = 0;
             idx++;
             continue;
         }

@@ -9,6 +9,9 @@ enum page_state {
     PAGE_STATE_FREE_HEAD = 0,       // the free head page
     PAGE_STATE_FREE_TAIL,           // the non-head free page
 
+    /* --- Reserved state --- */
+    PAGE_STATE_RESERVED,            // reserved page during startup
+
     /* --- Allocated states managed by allocator --- */
     PAGE_STATE_ALLOC_PAGE_HEAD,    // the large allocated head page
     PAGE_STATE_ALLOC_PAGE_TAIL,    // the non-head allocated page
