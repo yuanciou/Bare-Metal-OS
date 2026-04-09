@@ -426,6 +426,7 @@ void free(void *ptr) {
         unsigned int chunk_size;
         unsigned long offset;
         struct chunk *ck;
+        struct list_head *pos;
 
         if (pool_idx < 0 || pool_idx >= CHUNK_POOL_COUNT) {
             return;
@@ -441,6 +442,17 @@ void free(void *ptr) {
 
         // change the ptr to struct chunk and add it back to free list
         ck = (struct chunk *)ptr;
+
+        // Double free on chunk check -> check if the chunk already in the free list
+        pos = g_pools[pool_idx].free_list.next;
+        while (pos != &g_pools[pool_idx].free_list) {
+            if (pos == &ck->node) {
+                ALLOC_LOG("[Error] Invalid Free! Chunk 0x%lx is already free.\r\n", addr);
+                return; // reject double free
+            }
+            pos = pos->next;
+        }
+
         list_add(&ck->node, &g_pools[pool_idx].free_list);
         
         frame_array[page_idx].ref_count--;
