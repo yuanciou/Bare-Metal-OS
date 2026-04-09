@@ -316,6 +316,9 @@ void allocator_init(const void *fdt) {
         return;
     }
 
+    // Initialize frame array to avoid random garbage values causing false PAGE_STATE_RESERVED
+    memset(frame_array, 0, G_MEM_TOTAL_PAGE * sizeof(struct frame));
+
     // Now that frame array is created, we can tell buddy to mark pages as reserved
     // since `reserved_rgns` is a local array, so we do this here
     for (i = 0; i < reserved_rgn_count; ++i) {
