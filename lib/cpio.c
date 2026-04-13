@@ -2,6 +2,7 @@
 #include "string.h"
 #include <stddef.h>
 #include "stdio.h"
+#include "align.h"
 
 extern void uart_putc(char c);
 
@@ -41,17 +42,6 @@ static int hextoi(const char* s, int n) {
     return r;
 }
 
-/**
- * @brief Align a number to the nearest multiple of a given number
- *
- * @param n number
- * @param byte alignment
- * @return aligned number
- */
-static int align(int n, int byte) {
-    return (n + byte - 1) & ~(byte - 1);
-}
-
 void initrd_list(const void* rd) { // *rd -> the start position of the initramfs
     // since void* cannot do pointer arithmetic (+-)
     // change to char* since char is 1 byte (+N = +(N * sizeof(char)) bytes)
@@ -82,7 +72,7 @@ void initrd_list(const void* rd) { // *rd -> the start position of the initramfs
         printf("%d \t %s\r\n", filesize, name);
         
         // since (cpio header + name size) and (file size) are both aligned to 4 bytes
-        ptr += align(sizeof(struct cpio_t) + namesize, 4) + align(filesize, 4);
+        ptr += align_up_int((int)sizeof(struct cpio_t) + namesize, 4) + align_up_int(filesize, 4);
     }
 }
 
@@ -107,7 +97,7 @@ void initrd_cat(const void* rd, const char* filename) {
         // change part
         if (strcmp(name, filename) == 0) {
             // skip align4(cpio header + namesize) to get the data part
-            const char* data = ptr + align(sizeof(struct cpio_t) + namesize, 4);
+            const char* data = ptr + align_up_int((int)sizeof(struct cpio_t) + namesize, 4);
 
             // directly putchar the data 
             for (int i = 0; i < filesize; ++i) {
@@ -122,7 +112,7 @@ void initrd_cat(const void* rd, const char* filename) {
         }
         
         // if strcmp to filename wrong
-        ptr += align(sizeof(struct cpio_t) + namesize, 4) + align(filesize, 4);
+        ptr += align_up_int((int)sizeof(struct cpio_t) + namesize, 4) + align_up_int(filesize, 4);
     }
     
     if (!found) {

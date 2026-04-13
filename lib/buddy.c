@@ -1,0 +1,350 @@
+#include "buddy.h"
+
+#include "list.h"
+#include "stdio.h"
+#include "config.h"
+#include "align.h"
+
+// __VA_ARGS__ -> passed all parameters in ... to the location of __VA_ARGS__
+// use do {} while (0) to avoid the syntax error when using in `if`
+#if ALLOC_ENABLE_DEMO_LOG
+#define BUDDY_LOG(...) printf(__VA_ARGS__)
+#else
+#define BUDDY_LOG(...) do { } while (0)
+#endif
+
+// g_ -> global variable prefix
+struct frame *frame_array;
+static struct list_head free_area[BUDDY_MAX_ORDER + 1]; // free area list for each order
+
+unsigned long G_MEMPOOL_START = BUDDY_DEFAULT_POOL_START; // memory pool start address
+unsigned long G_MEMPOOL_SIZE = BUDDY_DEFAULT_POOL_SIZE; // memory pool size
+unsigned long G_MEM_TOTAL_PAGE = BUDDY_DEFAULT_POOL_SIZE >> PAGE_SHIFT; // total pages in the memory pool
+static int buddy_ready; // check the buddy_init() is done
+
+static unsigned long page_to_addr(unsigned long idx) {
+    // addr = start + idx * PAGE_SIZE
+    // (<< PAGE_SHIFT) = * 2^PAGE_SHIFT
+    return G_MEMPOOL_START + (idx << PAGE_SHIFT);
+}
+
+/**
+ * @brief Find the head of the continuous block and the tailing pages of this block.
+ *
+ * @param idx the head page idx of the block
+ * @param order the order of the block
+ * @param head_state the state to mark the head page (FREE/ALLOC)
+ * @param tail_state the state to mark the tailing pages (FREE/ALLOC)
+ */
+static void mark_block(unsigned long idx,
+                       unsigned int order,
+                       enum page_state head_state,
+                       enum page_state tail_state) {
+    unsigned long count = 1UL << order; // #pages in this block
+    unsigned long i;
+
+    // mark the head page
+    frame_array[idx].state = head_state;
+    frame_array[idx].order = (int)order;
+
+    // mark the tailing pages of this block
+    for (i = 1; i < count; ++i) {
+        frame_array[idx + i].state = tail_state;
+        frame_array[idx + i].order = -1;
+    }
+}
+
+static void add_free_block(unsigned long idx, unsigned int order) {
+    mark_block(idx, order, PAGE_STATE_FREE_HEAD, PAGE_STATE_FREE_TAIL);
+
+    // add the head page (frame_array[idx]) to the free list of this order (free_area[order])
+    // frame_array -> the struct frame (metadata)
+    // free_area -> only the list_head 
+    list_add(&frame_array[idx].node, &free_area[order]);
+
+    BUDDY_LOG("[+ buddy] Add page %lu to order %u. Range of pages: [%lu, %lu]\r\n",
+              idx, order, idx, idx + (1UL << order) - 1);
+}
+
+static void remove_free_block(unsigned long idx, unsigned int order) {
+    list_del(&frame_array[idx].node); // remove from the free list
+    frame_array[idx].state = PAGE_STATE_ALLOC_PAGE_HEAD; // mark as ALLOC
+
+    BUDDY_LOG("[- buddy] Remove page %lu from order %u. Range of pages: [%lu, %lu]\r\n",
+              idx, order, idx, idx + (1UL << order) - 1);
+}
+
+/**
+ * @brief Set the memory pool region (set G_MEMPOOL_START, G_MEMPOOL_SIZE and G_MEM_TOTAL_PAGE)
+ *
+ * @param start the start address of the memory pool
+ * @param size the size of the memory pool
+ */
+void buddy_set_region(unsigned long start, unsigned long size) {
+    if (size == 0) { // use default region if size is 0 or invalid
+        G_MEMPOOL_START = BUDDY_DEFAULT_POOL_START;
+        G_MEMPOOL_SIZE = BUDDY_DEFAULT_POOL_SIZE;
+    } else {
+        // use align_down_ul() to make sure the page-aligned region is safe
+        G_MEMPOOL_START = align_up_ul(start, PAGE_SIZE);
+        G_MEMPOOL_SIZE = align_down_ul(size, PAGE_SIZE);
+        
+        // check the upper bound limit to avoid overflow
+        if (G_MEMPOOL_SIZE > BUDDY_MAX_POOL_SIZE) {
+            G_MEMPOOL_SIZE = BUDDY_MAX_POOL_SIZE;
+        }
+    }
+
+    // check the lower bound limit to avoid invalid region
+    if (G_MEMPOOL_SIZE < PAGE_SIZE) {
+        // if the size less than a page -> use default region
+        G_MEMPOOL_SIZE = BUDDY_DEFAULT_POOL_SIZE;
+        G_MEMPOOL_START = BUDDY_DEFAULT_POOL_START;
+    }
+
+    // cal the #pages
+    G_MEM_TOTAL_PAGE = G_MEMPOOL_SIZE >> PAGE_SHIFT;
+    if (G_MEM_TOTAL_PAGE > BUDDY_TOTAL_PAGES) {
+        // check the #page upper bound to avoid buffer overflow
+        G_MEM_TOTAL_PAGE = BUDDY_TOTAL_PAGES;
+    }
+}
+
+void buddy_mark_reserved_range(unsigned long start, unsigned long size) {
+    unsigned long region_end;
+    unsigned long reserve_end;
+    unsigned long page_start;
+    unsigned long page_end;
+    unsigned long i;
+
+    if (size == 0 || G_MEM_TOTAL_PAGE == 0) {
+        return;
+    }
+
+    region_end = G_MEMPOOL_START + G_MEMPOOL_SIZE;
+    reserve_end = start + size;
+    
+    // not in the memory pool region -> ignore
+    if (reserve_end <= G_MEMPOOL_START || start >= region_end) {
+        return;
+    }
+
+    if (start < G_MEMPOOL_START) {
+        start = G_MEMPOOL_START;
+    }
+    if (reserve_end > region_end) {
+        reserve_end = region_end;
+    }
+
+    // find the page idx range
+    page_start = (start - G_MEMPOOL_START) >> PAGE_SHIFT; // >> PAGE_SHIFT = / PAGE_SIZE
+    page_end = align_up_ul(reserve_end - G_MEMPOOL_START, PAGE_SIZE) >> PAGE_SHIFT; // align_up_ul() to make sure the tailing page is fully reserved
+    if (page_end > G_MEM_TOTAL_PAGE) { // avoid overflow
+        page_end = G_MEM_TOTAL_PAGE;
+    }
+
+    for (i = page_start; i < page_end; ++i) {
+        frame_array[i].state = PAGE_STATE_RESERVED;
+    }
+}
+
+/**
+ * @brief init the buddy system
+ */
+void buddy_init(void) {
+    unsigned long idx = 0;
+    unsigned long i;
+
+    // mark all page as free tail (except the reserved page)
+    for (i = 0; i < G_MEM_TOTAL_PAGE; ++i) {
+        frame_array[i].order = -1;
+        if (frame_array[i].state != PAGE_STATE_RESERVED) {
+            frame_array[i].state = PAGE_STATE_ALLOC_PAGE_TAIL;
+        }
+        frame_array[i].meta_pool_idx = -1;
+        frame_array[i].ref_count = 0;
+        
+        // init the list head
+        INIT_LIST_HEAD(&frame_array[i].node);
+    }
+
+    // init the free_area list head
+    for (i = 0; i <= BUDDY_MAX_ORDER; ++i) {
+        INIT_LIST_HEAD(&free_area[i]);
+    }
+
+    while (idx < G_MEM_TOTAL_PAGE) {
+        // mark reserved pages as order 0 and continue
+        if (frame_array[idx].state == PAGE_STATE_RESERVED) {
+            frame_array[idx].order = 0;
+            idx++;
+            continue;
+        }
+
+        // Count contiguous free pages starting from idx
+        unsigned long free_count = 0;
+        while (idx + free_count < G_MEM_TOTAL_PAGE && 
+               frame_array[idx + free_count].state != PAGE_STATE_RESERVED) {
+            free_count++;
+        }
+
+        // Break the contiguous free space into valid buddy blocks
+        while (free_count > 0) {
+            int order;
+            for (order = BUDDY_MAX_ORDER; order >= 0; --order) {
+                unsigned long block_pages = 1UL << order;
+                // To be a free head of a block with order
+                // the block idx should be a multiple of block size
+                // and we must have enough contiguous free pages remaining
+                if ((idx & (block_pages - 1)) == 0 && block_pages <= free_count) {
+                    add_free_block(idx, (unsigned int)order);
+                    idx += block_pages;
+                    free_count -= block_pages;
+                    break;
+                }
+            }
+        }
+    }
+
+    buddy_ready = 1;
+    BUDDY_LOG("[Init Buddy] Buddy initialized at [0x%lx, 0x%lx), total pages: %u\r\n",
+              G_MEMPOOL_START,
+              G_MEMPOOL_START + G_MEMPOOL_SIZE,
+              (unsigned int)G_MEM_TOTAL_PAGE);
+}
+
+void *buddy_alloc_pages(unsigned int order) {
+    unsigned int current;
+    struct frame *blk;
+    unsigned long idx;
+
+    if (!buddy_ready || order > BUDDY_MAX_ORDER) {
+        return 0;
+    }
+
+    // find the free block >= the requested order
+    for (current = order; current <= BUDDY_MAX_ORDER; ++current) {
+        if (list_empty(&free_area[current])) {
+            // the cureent order doesn't have free block -> check higher order
+            continue;
+        }
+        
+        // free block found
+        blk = list_first_entry(&free_area[current], struct frame, node); // use node to get the struct pointer
+        idx = (unsigned long)(blk - frame_array); // since the compiler will auto (/ sizeof(struct frame)) -> the idx
+        remove_free_block(idx, current); // remove from free list
+
+        // split the block until the block order equals to the requested order
+        while (current > order) {
+            unsigned long buddy_idx;
+
+            current--; // less the order
+            buddy_idx = idx + (1UL << current); // the buddy block idx is current idx + block size (1 << current)
+            add_free_block(buddy_idx, current);
+
+            BUDDY_LOG("[Split Buddy] Release redundant block to free list: page %lu at order %u\r\n",
+                      buddy_idx, current);
+        }
+
+        mark_block(idx, order, PAGE_STATE_ALLOC_PAGE_HEAD, PAGE_STATE_ALLOC_PAGE_TAIL);
+        BUDDY_LOG("[Page Buddy] Allocate 0x%lx at order %u, page %lu\r\n",
+                  page_to_addr(idx),
+                  order,
+                  idx);
+        BUDDY_LOG("[Alloc Buddy] Free blocks per order:\r\n");
+        buddy_dump_free_areas();
+        return (void *)page_to_addr(idx);
+    }
+
+    return 0;
+}
+
+void buddy_free_pages(void *ptr) {
+    unsigned long addr;
+    unsigned long idx;
+    unsigned int order;
+
+    if (!buddy_ready || !ptr) {
+        return;
+    }
+
+    addr = (unsigned long)ptr;
+    
+    // check valid region
+    if (addr < G_MEMPOOL_START || addr >= G_MEMPOOL_START + G_MEMPOOL_SIZE) {
+        return;
+    }
+
+    // check addr is page-aligned
+    if ((addr & (PAGE_SIZE - 1)) != 0) {
+        return;
+    }
+
+    idx = (addr - G_MEMPOOL_START) >> PAGE_SHIFT;
+
+    // the freed page should be the alloc head
+    if (idx >= G_MEM_TOTAL_PAGE || frame_array[idx].state != PAGE_STATE_ALLOC_PAGE_HEAD) {
+        return;
+    }
+
+    // set this block as free
+    order = (unsigned int)frame_array[idx].order;
+    mark_block(idx, order, PAGE_STATE_FREE_HEAD, PAGE_STATE_FREE_TAIL);
+
+    // try to merge buddy
+    while (order < BUDDY_MAX_ORDER) {
+        // since only the order-th bit of the idx will be different of the buddy
+        unsigned long buddy_idx = idx ^ (1UL << order);
+
+        if (buddy_idx >= G_MEM_TOTAL_PAGE) {
+            break;
+        }
+
+        // the buddy should 1. free  2. have the same size -> can be merge
+        if (frame_array[buddy_idx].state != PAGE_STATE_FREE_HEAD || // not free or not same size
+            (unsigned int)frame_array[buddy_idx].order != order) {
+            break;
+        }
+
+        BUDDY_LOG("[*] Buddy found! buddy idx: %lu for page %lu with order %u\r\n",
+                  buddy_idx,
+                  idx,
+                  order);
+
+        // get buddy from free list
+        remove_free_block(buddy_idx, order);
+
+        // the free head should be the smaller one
+        if (buddy_idx < idx) {
+            idx = buddy_idx;
+        }
+
+        order++;
+        
+        // mark the merged block as free and merge iteratively
+        mark_block(idx, order, PAGE_STATE_FREE_HEAD, PAGE_STATE_FREE_TAIL);
+        BUDDY_LOG("[Merge Buddy] Merge iteratively to order %u at page %lu\r\n", order, idx);
+    }
+
+    // add the final merged block to free list
+    add_free_block(idx, order);
+    BUDDY_LOG("[Page Buddy] Free 0x%lx and add back to order %u, page %lu\r\n",
+              page_to_addr(idx),
+              order,
+              idx);
+    BUDDY_LOG("[Free Buddy] Free blocks per order:\r\n");
+    buddy_dump_free_areas();
+}
+
+void buddy_dump_free_areas(void) {
+    unsigned int i;
+    for (i = 0; i <= BUDDY_MAX_ORDER; ++i) {
+        unsigned int count = 0;
+        struct list_head *it;
+
+        for (it = free_area[i].next; it != &free_area[i]; it = it->next) {
+            count++;
+        }
+        BUDDY_LOG("free_area[%u] = %u\r\n", i, count);
+    }
+}
