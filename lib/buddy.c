@@ -17,9 +17,6 @@
 struct frame *frame_array;
 static struct list_head free_area[BUDDY_MAX_ORDER + 1]; // free area list for each order
 
-// prefix sum array for reserved pages
-// if reserved_prefix[end] - reserved_prefix[start] > 0 -> there exist reserved pages -> find quickly 
-static unsigned int reserved_prefix[BUDDY_TOTAL_PAGES + 1];
 unsigned long G_MEMPOOL_START = BUDDY_DEFAULT_POOL_START; // memory pool start address
 unsigned long G_MEMPOOL_SIZE = BUDDY_DEFAULT_POOL_SIZE; // memory pool size
 unsigned long G_MEM_TOTAL_PAGE = BUDDY_DEFAULT_POOL_SIZE >> PAGE_SHIFT; // total pages in the memory pool
@@ -29,10 +26,6 @@ static unsigned long page_to_addr(unsigned long idx) {
     // addr = start + idx * PAGE_SIZE
     // (<< PAGE_SHIFT) = * 2^PAGE_SHIFT
     return G_MEMPOOL_START + (idx << PAGE_SHIFT);
-}
-
-static int range_has_reserved(unsigned long idx, unsigned long count) {
-    return reserved_prefix[idx + count] != reserved_prefix[idx];
 }
 
 /**
@@ -79,19 +72,6 @@ static void remove_free_block(unsigned long idx, unsigned int order) {
 
     BUDDY_LOG("[- buddy] Remove page %lu from order %u. Range of pages: [%lu, %lu]\r\n",
               idx, order, idx, idx + (1UL << order) - 1);
-}
-
-/**
- * @brief Build the prefix sum of the reserved_map
- */
-static void build_reserved_prefix(void) {
-    unsigned long i;
-
-    reserved_prefix[0] = 0;
-    for (i = 0; i < G_MEM_TOTAL_PAGE; ++i) {
-        reserved_prefix[i + 1] = reserved_prefix[i] +
-                                 (frame_array[i].state == PAGE_STATE_RESERVED ? 1U : 0U);
-    }
 }
 
 /**
@@ -193,9 +173,6 @@ void buddy_init(void) {
         INIT_LIST_HEAD(&free_area[i]);
     }
 
-    // for quick check if there exist reserved page in a range
-    build_reserved_prefix();
-
     while (idx < G_MEM_TOTAL_PAGE) {
         // mark reserved pages as order 0 and continue
         if (frame_array[idx].state == PAGE_STATE_RESERVED) {
@@ -204,21 +181,27 @@ void buddy_init(void) {
             continue;
         }
 
-        // for free pages
-        // To be a free head of a block with order
-        // the block idx should be a multiple of block size
-        // the block should not contain reserved pages
-        // ex: page 4 can be a head for order 2, 1, 0
-        //     page 5 can only be a head for order 0    
-        int order;
-        for (order = BUDDY_MAX_ORDER; order >= 0; --order) {
-            unsigned long block_pages = 1UL << order;
-            if ((idx & (block_pages - 1)) == 0 &&   // use mask to check if idx is a multiple of block_pages
-                idx + block_pages <= G_MEM_TOTAL_PAGE && // in memory pool range
-                !range_has_reserved(idx, block_pages)) { // no reserved page
-                add_free_block(idx, (unsigned int)order);
-                idx += block_pages; // skip trough the block
-                break;
+        // Count contiguous free pages starting from idx
+        unsigned long free_count = 0;
+        while (idx + free_count < G_MEM_TOTAL_PAGE && 
+               frame_array[idx + free_count].state != PAGE_STATE_RESERVED) {
+            free_count++;
+        }
+
+        // Break the contiguous free space into valid buddy blocks
+        while (free_count > 0) {
+            int order;
+            for (order = BUDDY_MAX_ORDER; order >= 0; --order) {
+                unsigned long block_pages = 1UL << order;
+                // To be a free head of a block with order
+                // the block idx should be a multiple of block size
+                // and we must have enough contiguous free pages remaining
+                if ((idx & (block_pages - 1)) == 0 && block_pages <= free_count) {
+                    add_free_block(idx, (unsigned int)order);
+                    idx += block_pages;
+                    free_count -= block_pages;
+                    break;
+                }
             }
         }
     }
