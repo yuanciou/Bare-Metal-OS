@@ -5,6 +5,7 @@
 #include "lib/fdt.h"
 #include "config.h"
 #include "allocator.h"
+#include "src/exception.h"
 
 extern char uart_getc(void);
 extern char uart_getc_raw(void);
@@ -44,6 +45,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
             printf("  info - print system info.\r\n");
             printf("  ls - list files in initramfs.\r\n");
             printf("  cat [file] - print file content in initramfs.\r\n");
+            printf("  exec [file] - execute user program in U-mode.\r\n");
         } else if (strcmp(buffer, "hello") == 0) {
             printf("Hello world.\r\n");
         } else if (strcmp(buffer, "info") == 0) {
@@ -72,6 +74,16 @@ void run_shell(unsigned long hartid, const void *fdt) {
                 }
             } else {
                 printf("Usage: cat [file]\r\n");
+            }
+        } else if (buffer[0] == 'e' && buffer[1] == 'x' && buffer[2] == 'e' && buffer[3] == 'c') {
+            if (buffer[4] == ' ') {
+                if (initrd_start) {
+                    exec(buffer + 5, initrd_start);
+                } else {
+                    printf("No initrd found\r\n");
+                }
+            } else {
+                printf("Usage: exec [file]\r\n");
             }
         } else {
             printf("Unknown command: ");

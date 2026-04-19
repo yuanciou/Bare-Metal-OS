@@ -119,3 +119,30 @@ void initrd_cat(const void* rd, const char* filename) {
         printf("File %s not found\r\n", filename);
     }
 }
+
+int initrd_get_file(const void* rd, const char* filename, const char** dataout, int* sizeout) {
+    const char* ptr = (const char*)rd;
+    while (1) {
+        struct cpio_t* header = (struct cpio_t*)ptr;
+        if (strncmp(header->magic, "070701", 6) != 0) {
+            return -1;
+        }
+        int namesize = hextoi(header->namesize, 8);
+        int filesize = hextoi(header->filesize, 8);
+        const char* name = ptr + sizeof(struct cpio_t);
+        
+        if (strcmp(name, "TRAILER!!!") == 0) {
+            break;
+        }
+        
+        if (strcmp(name, filename) == 0) {
+            const char* data = ptr + align_up_int((int)sizeof(struct cpio_t) + namesize, 4);
+            if (dataout) *dataout = data;
+            if (sizeout) *sizeout = filesize;
+            return 0;
+        }
+        
+        ptr += align_up_int((int)sizeof(struct cpio_t) + namesize, 4) + align_up_int(filesize, 4);
+    }
+    return -1;
+}
