@@ -33,5 +33,6 @@ long sbi_get_spec_version(void);
 long sbi_probe_extension(int extid);
 long sbi_get_impl_id(void);
 long sbi_get_impl_version(void);
+void sbi_set_timer(unsigned long stime_value);
 
 #endif // SBI_H

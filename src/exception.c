@@ -2,8 +2,19 @@
 #include "../lib/stdio.h"
 #include "allocator.h"
 #include "../lib/cpio.h"
+#include "timer.h"
 
 void do_trap(struct pt_regs* regs) {
+    if (regs->cause & (1ULL << 63)) { // 最高位元為 1 代表這是一個 Interrupt (hardware do automatically)
+        unsigned long cause = regs->cause & ~(1ULL << 63);
+        if (cause == 5) { // 5 代表 Supervisor timer interrupt
+            handle_timer_interrupt();
+            return;
+        }
+        printf("Unknown interrupt: %ld\r\n", cause);
+        return;
+    }
+
     printf("Exception:\r\n");
     printf("  scause: 0x%lx\r\n", regs->cause);
     printf("  sepc: 0x%lx\r\n", regs->epc);

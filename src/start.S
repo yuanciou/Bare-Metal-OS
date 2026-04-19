@@ -19,6 +19,9 @@ clear_bss_done:
     la t0, handle_exception
     csrw stvec, t0
 
+    // Initialize sscratch to zero so that our trap handler knows we are starting in S-mode
+    csrw sscratch, zero
+
     tail start_kernel
 
 .global handle_exception

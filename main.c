@@ -6,6 +6,7 @@
 #include "config.h"
 #include "allocator.h"
 #include "src/exception.h"
+#include "src/timer.h"
 
 extern char uart_getc(void);
 extern char uart_getc_raw(void);
@@ -97,6 +98,7 @@ void start_kernel(unsigned long hartid, const void *fdt) {
     init_uart_from_fdt(fdt);
     printf("Hello from Main Kernel!\r\n");
     allocator_init(fdt);
+    timer_init(fdt);
     
     run_shell(hartid, fdt);
 }

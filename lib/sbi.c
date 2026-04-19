@@ -1,4 +1,5 @@
 #include "sbi.h"
+#include "stdio.h"
 
 struct sbiret sbi_ecall(int ext,
                         int fid,
@@ -57,4 +58,9 @@ long sbi_get_impl_id(void) {
 long sbi_get_impl_version(void) {
     struct sbiret ret = sbi_ecall(SBI_EXT_BASE, SBI_EXT_BASE_GET_IMP_VERSION, 0, 0, 0, 0, 0, 0);
     return ret.value;
+}
+
+void sbi_set_timer(unsigned long stime_value) {
+    // 優先使用 Legacy SBI Extension (0x0)，因為某些實體板的 TIME extension 可能沒有實作完全
+    sbi_ecall(0x0, 0, stime_value, 0, 0, 0, 0, 0);
 }
