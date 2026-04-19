@@ -8,7 +8,7 @@ extern unsigned long uart_base_addr;
 //                           Memory Allocator
 // =======================================================================
 // 1: print the buddy log; 0: disable the buddylog
-#define ALLOC_ENABLE_DEMO_LOG 1
+#define ALLOC_ENABLE_DEMO_LOG 0
 
 #define PAGE_SHIFT 12UL
 #define PAGE_SIZE (1UL << PAGE_SHIFT)
