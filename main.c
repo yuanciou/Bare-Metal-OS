@@ -10,6 +10,35 @@
 #include "src/plic.h"
 #include "src/uart.h"
 
+struct timeout_args {
+    char *message;
+    int duration;
+    unsigned long executed_time;
+};
+
+static void timeout_callback(void* arg) {
+    struct timeout_args *targs = (struct timeout_args *)arg;
+    unsigned long current_time = get_time_in_seconds();
+    
+    // Asynchronous output from timer interrupt, so we might need to recreate the prompt 
+    // depending on the terminal layout, but here we just print what is requested.
+    printf("\r\n[%lu] setTimeout: %s (Command executed at: %lu, duration: %d seconds)\r\n# ", 
+           current_time, targs->message, targs->executed_time, targs->duration);
+    
+    // Free the duplicated string and standard argument node
+    free(targs->message);
+    free(targs);
+}
+
+static int my_atoi(const char *str) {
+    int res = 0;
+    while (*str >= '0' && *str <= '9') {
+        res = res * 10 + (*str - '0');
+        str++;
+    }
+    return res;
+}
+
 void run_shell(unsigned long hartid, const void *fdt) {
     char buffer[256];
     int idx = 0;
@@ -43,6 +72,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
             printf("  ls - list files in initramfs.\r\n");
             printf("  cat [file] - print file content in initramfs.\r\n");
             printf("  exec [file] - execute user program in U-mode.\r\n");
+            printf("  setTimeout SECONDS MESSAGE - set a timeout with a message.\r\n");
         } else if (strcmp(buffer, "hello") == 0) {
             printf("Hello world.\r\n");
         } else if (strcmp(buffer, "info") == 0) {
@@ -82,6 +112,46 @@ void run_shell(unsigned long hartid, const void *fdt) {
             } else {
                 printf("Usage: exec [file]\r\n");
             }
+        } else if (strncmp(buffer, "setTimeout ", 11) == 0) {
+            char *args = buffer + 11;
+            while (*args == ' ') args++;
+            
+            if (*args < '0' || *args > '9') {
+                printf("Usage: setTimeout SECONDS MESSAGE\r\n");
+                continue;
+            }
+            int sec = my_atoi(args);
+            
+            // Skip the numbers
+            while (*args >= '0' && *args <= '9') args++;
+            // Skip spaces between sec and message
+            while (*args == ' ') args++;
+            
+            if (*args == '\0') {
+                printf("Usage: setTimeout SECONDS MESSAGE\r\n");
+                continue;
+            }
+            
+            // Dynamically allocate memory for message (non-blocking shell will overwrite buffer)
+            int len = strlen(args);
+            char *msg_copy = (char *)allocate((unsigned long)(len + 1));
+            if (!msg_copy) {
+                printf("Failed to allocate memory for setTimeout\r\n");
+                continue;
+            }
+            strcpy(msg_copy, args);
+            
+            struct timeout_args *targs = (struct timeout_args *)allocate((unsigned long)sizeof(struct timeout_args));
+            if (!targs) {
+                free(msg_copy);
+                printf("Failed to allocate memory for setTimeout arguments\r\n");
+                continue;
+            }
+            targs->message = msg_copy;
+            targs->duration = sec;
+            targs->executed_time = get_time_in_seconds();
+            
+            add_timer(timeout_callback, targs, sec);
         } else {
             printf("Unknown command: ");
             printf(buffer);
