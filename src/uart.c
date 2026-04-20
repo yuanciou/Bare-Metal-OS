@@ -67,11 +67,25 @@ static void uart_try_tx(void) {
 }
 
 void handle_uart_interrupt(void) {
-    while ((*UART_LSR & LSR_DR) != 0) {
-        char c = (char)*UART_RBR;
-        ringbuf_push(&rx_ring, c);
+    // 反覆讀取 UART_IIR (Interrupt Identification Register) 直到沒有中斷 pending
+    // 讀取 IIR 可以有效地清除部分鎖死的中斷信號 (例如 THR Empty 狀態)
+    while (1) {
+        unsigned int iir = *UART_IIR;
+        if ((iir & 1) == 1) { // bit 0 為 1 代表沒有 pending 的中斷
+            break;
+        }
+
+        // 如果是因為「收到資料」(Receiver Data Ready) 觸發的中斷
+        if ((*UART_LSR & LSR_DR) != 0) {
+            while ((*UART_LSR & LSR_DR) != 0) {
+                char c = (char)*UART_RBR;
+                ringbuf_push(&rx_ring, c);
+            }
+        }
+
+        // 嘗試將 TX ring buffer 裡的資料吐出去
+        uart_try_tx();
     }
-    uart_try_tx();
 }
 
 char uart_getc_polling() {
