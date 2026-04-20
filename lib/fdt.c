@@ -232,10 +232,22 @@ void init_uart_from_fdt(const void *fdt) {
 
     // get the "reg" property
     const void *reg_prop = fdt_getprop(fdt, uart_offset, "reg", &len);
-    if (!reg_prop) return;
+    if (!reg_prop || len < 4) return;
 
-    // big-endian to little-endian
-    unsigned long base = bswap64(*(const unsigned long *)reg_prop);
+    // Determine address cells from root or assume 2
+    int root_offset = fdt_path_offset(fdt, "/");
+    int ac_len;
+    const uint32_t* ac_prop = fdt_getprop(fdt, root_offset, "#address-cells", &ac_len);
+    int addr_cells = ac_prop ? bswap32(*ac_prop) : 2;
+
+    // Read base address safely to avoid unaligned access faults
+    const uint32_t *reg_words = (const uint32_t *)reg_prop;
+    unsigned long base = 0;
+    if (addr_cells == 2 && len >= 8) {
+        base = ((unsigned long)bswap32(reg_words[0]) << 32) | bswap32(reg_words[1]);
+    } else {
+        base = bswap32(reg_words[0]);
+    }
     uart_base_addr = base;
 }
 
@@ -260,7 +272,7 @@ static unsigned long parse_addr_prop(const void *prop, int len) {
         return (unsigned long)bswap32(*(const uint32_t *)prop);
     }
     if (len == 8) {  // Orange Pi
-        return (unsigned long)bswap64(*(const uint64_t *)prop);
+        return (unsigned long)(((unsigned long)bswap32(*(const uint32_t *)prop) << 32) | bswap32(*((const uint32_t *)prop + 1)));
     }
 
     return 0;
@@ -322,8 +334,8 @@ static int parse_start_and_size(const void *reg_prop,
     }
 
     if (len >= 16) { // 64-bit -> Orange Pi
-        *start = (unsigned long)bswap64(*(const uint64_t *)reg_prop);
-        *size = (unsigned long)bswap64(*((const uint64_t *)reg_prop + 1));
+        *start = (unsigned long)(((unsigned long)bswap32(*(const uint32_t *)reg_prop) << 32) | bswap32(*((const uint32_t *)reg_prop + 1)));
+        *size = (unsigned long)((((unsigned long)bswap32(*((const uint32_t *)reg_prop + 2))) << 32) | bswap32(*((const uint32_t *)reg_prop + 3)));
         return 0;
     }
 
@@ -378,7 +390,7 @@ static int parse_alloc_ranges_with_size(const void *alloc_ranges_prop,
     }
 
     if (size_len >= 8) {
-        requested_size = (unsigned long)bswap64(*(const uint64_t *)size_prop);
+        requested_size = (unsigned long)(((unsigned long)bswap32(*(const uint32_t *)size_prop) << 32) | bswap32(*((const uint32_t *)size_prop + 1)));
     } else if (size_len >= 4) {
         requested_size = (unsigned long)bswap32(*(const uint32_t *)size_prop);
     } else {
@@ -510,4 +522,144 @@ int fdt_get_reserved_memory_region(const void *fdt,
     }
 
     return -1;
+}
+
+int fdt_get_node_by_phandle(const void* fdt, uint32_t phandle) {
+    const struct fdt_header* header = (const struct fdt_header*)fdt;
+    if (bswap32(header->magic) != 0xd00dfeed) return -1;
+    
+    uint32_t off_dt_struct = bswap32(header->off_dt_struct);
+    const char* struct_ptr = (const char*)fdt + off_dt_struct;
+    const char* strings_block = (const char*)fdt + bswap32(header->off_dt_strings);
+
+    int current_node_offset = struct_ptr - (const char*)fdt;
+
+    while (1) {
+        uint32_t token = bswap32(*(const uint32_t*)struct_ptr);
+        int token_offset = struct_ptr - (const char*)fdt;
+        struct_ptr += 4;
+
+        if (token == FDT_BEGIN_NODE) {
+            current_node_offset = token_offset;
+            const char* node_name = struct_ptr;
+            struct_ptr = align_up_ptr(struct_ptr + strlen(node_name) + 1, 4);
+        } else if (token == FDT_END_NODE) {
+        } else if (token == FDT_PROP) {
+            uint32_t len = bswap32(((const uint32_t*)struct_ptr)[0]);
+            uint32_t nameoff = bswap32(((const uint32_t*)struct_ptr)[1]);
+            const char* prop_name = strings_block + nameoff;
+            struct_ptr += 8;
+
+            if (strcmp(prop_name, "phandle") == 0 || strcmp(prop_name, "linux,phandle") == 0) {
+                if (len >= 4) {
+                    uint32_t val = bswap32(*(const uint32_t*)struct_ptr);
+                    if (val == phandle) {
+                        return current_node_offset;
+                    }
+                }
+            }
+            struct_ptr = align_up_ptr(struct_ptr + len, 4);
+        } else if (token == FDT_NOP) {
+        } else if (token == FDT_END) {
+            break;
+        }
+    }
+    return -1;
+}
+
+int g_uart_irq = 10;
+
+unsigned long fdt_get_plic_base(const void* fdt) {
+    int uart_offset = fdt_path_offset(fdt, "/chosen");
+    if (uart_offset >= 0) {
+        int len;
+        const void *prop = fdt_getprop(fdt, uart_offset, "stdout-path", &len);
+        if (prop) {
+            char path[256];
+            int i = 0;
+            while(i < len && ((const char*)prop)[i] && ((const char*)prop)[i] != ':') {
+                path[i] = ((const char*)prop)[i];
+                i++;
+            }
+            path[i] = '\0';
+            
+            // Re-find actual UART node or alias
+            uart_offset = fdt_path_offset(fdt, path);
+            if (uart_offset < 0) {
+                int aliases_offset = fdt_path_offset(fdt, "/aliases");
+                if (aliases_offset >= 0) {
+                    const void *alias_prop = fdt_getprop(fdt, aliases_offset, path, &len);
+                    if (alias_prop) {
+                        uart_offset = fdt_path_offset(fdt, (const char*)alias_prop);
+                    }
+                }
+            }
+        }
+    }
+    
+    if (uart_offset < 0) return 0;
+
+    int len;
+    const uint32_t *iparent = fdt_getprop(fdt, uart_offset, "interrupt-parent", &len);
+    if (!iparent) return 0;
+
+    unsigned long method1_base = 0;
+    uint32_t plic_phandle = bswap32(*iparent);
+    int plic_offset = fdt_get_node_by_phandle(fdt, plic_phandle);
+
+    if (plic_offset >= 0) {
+        const uint32_t *reg = fdt_getprop(fdt, plic_offset, "reg", &len);
+        if (reg) {
+            int root_offset = fdt_path_offset(fdt, "/");
+            const uint32_t* ac_prop = fdt_getprop(fdt, root_offset, "#address-cells", &len);
+            int addr_cells = ac_prop ? bswap32(*ac_prop) : 2;
+
+            if (addr_cells == 2) {
+                method1_base = ((uint64_t)bswap32(reg[0]) << 32) | bswap32(reg[1]);
+            } else {
+                method1_base = bswap32(reg[0]);
+            }
+        }
+    }
+    return method1_base;
+}
+
+int uart_get_irq(const void* fdt) {
+    if (!fdt) return 10;
+    int uart_offset = fdt_path_offset(fdt, "/chosen");
+    if (uart_offset >= 0) {
+        int len;
+        const void *prop = fdt_getprop(fdt, uart_offset, "stdout-path", &len);
+        if (prop) {
+            char path[256];
+            int i = 0;
+            while(i < len && ((const char*)prop)[i] && ((const char*)prop)[i] != ':') {
+                path[i] = ((const char*)prop)[i];
+                i++;
+            }
+            path[i] = '\0';
+            
+            uart_offset = fdt_path_offset(fdt, path);
+            if (uart_offset < 0) {
+                int aliases_offset = fdt_path_offset(fdt, "/aliases");
+                if (aliases_offset >= 0) {
+                    const void *alias_prop = fdt_getprop(fdt, aliases_offset, path, &len);
+                    if (alias_prop) {
+                        uart_offset = fdt_path_offset(fdt, (const char*)alias_prop);
+                    }
+                }
+            }
+        }
+    }
+    if (uart_offset >= 0) {
+        int len;
+        const unsigned int *irq_prop = fdt_getprop(fdt, uart_offset, "interrupts", &len);
+        if (irq_prop && len >= 4) {
+            unsigned int irq = bswap32(*irq_prop);
+            g_uart_irq = (int)irq;
+            return irq;
+        }
+    }
+    g_uart_irq = 10;
+    return 10; // Default QEMU virt UART IRQ
 }

@@ -7,7 +7,7 @@ QEMU ?= qemu-system-riscv64
 TARGET = kernel
 
 # 基礎的 CFLAGS (去除了原本 ifeq 的判斷)
-CFLAGS = -mcmodel=medany -fno-pie -ffreestanding -nostdlib -g -Wall -march=rv64gc_zifencei -mabi=lp64d -Isrc -I..
+CFLAGS = -mcmodel=medany -fno-pie -ffreestanding -nostdlib -g -Wall -march=rv64gc_zifencei -mabi=lp64d -Isrc -Ilib
 
 # ----------------------------------------------------
 # 根據下達的指令，自動加上對應的 CFLAGS (取代原本的 ifeq)
@@ -37,8 +37,8 @@ orangepi: clean build_common
 # 共同的編譯規則
 # ----------------------------------------------------
 build_common:
-	# 使用 wildcard 自動抓取根目錄與 lib 目錄下的所有 .c 與 .S 檔
-	$(CC) $(CFLAGS) -c $(wildcard *.c *.S src/*.c src/*.S ../lib/*.c ../lib/*.S)
+	# 使用 wildcard 自動抓取當前目錄與 lib 目錄下的所有 .c 與 .S 檔
+	$(CC) $(CFLAGS) -c $(wildcard *.c *.S src/*.c src/*.S lib/*.c lib/*.S)
 	# gcc -c 會將所有編譯出來的 .o 檔放在「當前目錄」，所以可以直接 *.o 連結
 	$(LD) -T src/link.ld -o $(TARGET).elf *.o
 

@@ -3,12 +3,33 @@
 #include "allocator.h"
 #include "../lib/cpio.h"
 #include "timer.h"
+#include "uart.h"
+#include "plic.h"
 
 void do_trap(struct pt_regs* regs) {
     if (regs->cause & (1ULL << 63)) { // 最高位元為 1 代表這是一個 Interrupt (hardware do automatically)
         unsigned long cause = regs->cause & ~(1ULL << 63);
         if (cause == 5) { // 5 代表 Supervisor timer interrupt
             handle_timer_interrupt();
+            return;
+        } else if (cause == 9) { // 9 代表 Supervisor external interrupt
+            int irq = plic_claim();
+            
+            if (irq == 0) {
+                // 如果抓到 0，代表發生了 Context 錯位的中斷風暴！
+                printf("FATAL: PLIC claimed IRQ 0! Context ID mismatch!\r\n");
+                while(1); // 死在這裡，讓你看清楚錯誤訊息
+            }
+
+            if (irq > 0) {
+                extern int g_uart_irq;
+                if (irq == g_uart_irq) {
+                    handle_uart_interrupt();
+                } else {
+                    printf("Unknown external interrupt: %d\r\n", irq);
+                }
+                plic_complete(irq);
+            }
             return;
         }
         printf("Unknown interrupt: %ld\r\n", cause);
