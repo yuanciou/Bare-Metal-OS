@@ -524,6 +524,9 @@ int fdt_get_reserved_memory_region(const void *fdt,
     return -1;
 }
 
+/**
+ * @brief Find the offset of `phandle = <interrupt-patent value>`
+ */
 int fdt_get_node_by_phandle(const void* fdt, uint32_t phandle) {
     const struct fdt_header* header = (const struct fdt_header*)fdt;
     if (bswap32(header->magic) != 0xd00dfeed) return -1;
@@ -567,8 +570,9 @@ int fdt_get_node_by_phandle(const void* fdt, uint32_t phandle) {
     return -1;
 }
 
-int g_uart_irq = 10;
-
+/**
+ * @brief Find the PLIC base addr
+ */
 unsigned long fdt_get_plic_base(const void* fdt) {
     int uart_offset = fdt_path_offset(fdt, "/chosen");
     if (uart_offset >= 0) {
@@ -603,7 +607,7 @@ unsigned long fdt_get_plic_base(const void* fdt) {
     const uint32_t *iparent = fdt_getprop(fdt, uart_offset, "interrupt-parent", &len);
     if (!iparent) return 0;
 
-    unsigned long method1_base = 0;
+    unsigned long plic_base = 0;
     uint32_t plic_phandle = bswap32(*iparent);
     int plic_offset = fdt_get_node_by_phandle(fdt, plic_phandle);
 
@@ -615,15 +619,19 @@ unsigned long fdt_get_plic_base(const void* fdt) {
             int addr_cells = ac_prop ? bswap32(*ac_prop) : 2;
 
             if (addr_cells == 2) {
-                method1_base = ((uint64_t)bswap32(reg[0]) << 32) | bswap32(reg[1]);
+                plic_base = ((uint64_t)bswap32(reg[0]) << 32) | bswap32(reg[1]);
             } else {
-                method1_base = bswap32(reg[0]);
+                plic_base = bswap32(reg[0]);
             }
         }
     }
-    return method1_base;
+    return plic_base;
 }
 
+/**
+ * @brief Find the UART IRQ
+ */
+int g_uart_irq = 10;
 int uart_get_irq(const void* fdt) {
     if (!fdt) return 10;
     int uart_offset = fdt_path_offset(fdt, "/chosen");
@@ -660,6 +668,8 @@ int uart_get_irq(const void* fdt) {
             return irq;
         }
     }
+
+    // Default QEMU virt UART IRQ
     g_uart_irq = 10;
-    return 10; // Default QEMU virt UART IRQ
+    return 10;
 }

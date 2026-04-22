@@ -61,6 +61,6 @@ long sbi_get_impl_version(void) {
 }
 
 void sbi_set_timer(unsigned long stime_value) {
-    // 優先使用 Legacy SBI Extension (0x0)，因為某些實體板的 TIME extension 可能沒有實作完全
+    // use Legacy SBI Extension (0x0) to set timer
     sbi_ecall(0x0, 0, stime_value, 0, 0, 0, 0, 0);
 }
