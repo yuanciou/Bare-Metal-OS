@@ -9,6 +9,25 @@
 #include "src/timer.h"
 #include "src/plic.h"
 #include "src/uart.h"
+#include "src/task.h"
+
+void test_task_cb(void *arg) {
+    uart_puts("[Task] Executing Priority ");
+    uart_puts((char*)arg);
+    uart_puts("\r\n");
+}
+
+void long_running_task_cb(void *arg) {
+    uart_puts("[Task] Long Priority 1 Task started. Busy waiting to catch Timer Interrupt...\r\n");
+    // Expand the busy wait duration significantly to guarantee catching multiple
+    // 2-second timer tick intervals so we explicitly demonstrate Preemption!
+    // enable interrupt temporarily for testing
+    asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
+    for (volatile int i = 0; i < 9000000; i++) {
+        for (volatile int j = 0; j < 600; j++);
+    }
+    uart_puts("[Task] Long Priority 1 Task finished.\r\n");
+}
 
 struct timeout_args {
     char *message;
@@ -178,10 +197,31 @@ void start_kernel(unsigned long hartid, const void *fdt) {
 
     printf("Hello from Main Kernel! Initialization done.\r\n");
 
+    // add_task(test_task_cb, "3", 3);
+    
+    // We add a long running Priority 1 task.
+    // Right after timer initialization, a timer is ticking. When the timer interrupts
+    // while this Priority 1 task is running, a Priority 10 task (Timer callback)
+    // will be enqueued and seamlessly PREEMPT this one!
+    // add_task(long_running_task_cb, NULL, 1);
+    
+    // add_task(test_task_cb, "2", 2);
+
+    // Call run_tasks() manually once to consume these initial tasks so we can see preemption happen!
+    // run_tasks();
+
     // 5. 確保全部基礎建設準備完畢後，最後才把 UART 切換成 Interrupt mode (Async)
     // 避免在啟動途中、甚至 timer_init 還沒正確把 CSR sstatus 等打開前，就卡在 wfi。
     extern void uart_setup_interrupts(void);
     uart_setup_interrupts();
 
+    // We add a long running Priority 1 task.
+    // Right after timer initialization, a timer is ticking. When the timer interrupts
+    // while this Priority 1 task is running, a Priority 10 task (Timer callback)
+    // will be enqueued and seamlessly PREEMPT this one!
+    add_task(long_running_task_cb, NULL, 1);
+    
+    add_task(test_task_cb, "2", 2);
+    // printf("ttt\r\n");
     run_shell(hartid, fdt);
 }

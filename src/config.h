@@ -4,6 +4,9 @@
 // The base address of the UART interface
 extern unsigned long uart_base_addr;
 
+// timer interrupt /2 second
+#define ENABLE_PERIODIC_TIMER 1
+
 // =======================================================================
 //                           Memory Allocator
 // =======================================================================

@@ -5,22 +5,20 @@
 #include "timer.h"
 #include "uart.h"
 #include "plic.h"
+#include "task.h"
 
 void do_trap(struct pt_regs* regs) {
     if (regs->cause & (1ULL << 63)) { // 最高位元為 1 代表這是一個 Interrupt (hardware do automatically)
         unsigned long cause = regs->cause & ~(1ULL << 63);
         if (cause == 5) { // 5 代表 Supervisor timer interrupt
             handle_timer_interrupt();
-            return;
         } else if (cause == 9) { // 9 代表 Supervisor external interrupt
             int irq = plic_claim();
-            
             if (irq == 0) {
                 // 如果抓到 0，代表發生了 Context 錯位的中斷風暴！
                 printf("FATAL: PLIC claimed IRQ 0! Context ID mismatch!\r\n");
                 while(1); // 死在這裡，讓你看清楚錯誤訊息
             }
-
             if (irq > 0) {
                 extern int g_uart_irq;
                 if (irq == g_uart_irq) {
@@ -30,17 +28,32 @@ void do_trap(struct pt_regs* regs) {
                 }
                 plic_complete(irq);
             }
-            return;
+        } else {
+            printf("Unknown interrupt: %ld\r\n", cause);
         }
-        printf("Unknown interrupt: %ld\r\n", cause);
-        return;
+    } else {
+        printf("Exception:\r\n");
+        printf("  scause: 0x%lx\r\n", regs->cause);
+        printf("  sepc: 0x%lx\r\n", regs->epc);
+        printf("  stval: 0x%lx\r\n", regs->badaddr);
+        regs->epc += 4; // to move past the ecall instruction
     }
 
-    printf("Exception:\r\n");
-    printf("  scause: 0x%lx\r\n", regs->cause);
-    printf("  sepc: 0x%lx\r\n", regs->epc);
-    printf("  stval: 0x%lx\r\n", regs->badaddr);
-    regs->epc += 4; // to move past the ecall instruction
+    // Before returning to the original interrupted context, execute the tasks that
+    // were added into the task queue by top-half handlers while interrupts were enabled.
+    unsigned long saved_sepc, saved_sstatus, saved_scause, saved_stval;
+    asm volatile("csrr %0, sepc"   : "=r"(saved_sepc));
+    asm volatile("csrr %0, sstatus": "=r"(saved_sstatus));
+    asm volatile("csrr %0, scause" : "=r"(saved_scause));
+    asm volatile("csrr %0, stval"  : "=r"(saved_stval));
+
+    run_tasks(); // Will enable/disable SIE internally during tasks
+
+    asm volatile("csrc sstatus, %0" : : "r"(1 << 1)); // Disable SIE locally again just in case
+    asm volatile("csrw sepc, %0"   : : "r"(saved_sepc));
+    asm volatile("csrw sstatus, %0": : "r"(saved_sstatus));
+    asm volatile("csrw scause, %0" : : "r"(saved_scause));
+    asm volatile("csrw stval, %0"  : : "r"(saved_stval));
 }
 
 int exec(const char* filename, unsigned long initrd_start) {

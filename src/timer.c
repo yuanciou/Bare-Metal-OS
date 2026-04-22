@@ -5,7 +5,11 @@
 #include "../lib/endian.h"
 #include "../lib/list.h"
 #include "allocator.h"
+#include "config.h"
+#include "task.h"
 #include <stdint.h>
+
+#include "uart.h"
 
 // Core Timer frequency
 static unsigned long time_freq = 10000000;
@@ -30,6 +34,16 @@ unsigned long get_time_in_seconds(void) {
     return rdtime() / time_freq;
 }
 
+#ifdef ENABLE_PERIODIC_TIMER
+static void periodic_timer_callback(void* arg) {
+    // 印出開機後經過的秒數
+    printf("[Timer] %lu seconds passed since boot.\r\n", get_time_in_seconds());
+
+    // 重新註冊下一個 2 秒的計時器 (Reprogram the timer for the next 2 seconds)
+    add_timer(periodic_timer_callback, NULL, 10);
+}
+#endif
+
 void timer_init(const void *fdt) {
     // 必須在執行期初始化串列節點，才不會因為 Linker 編譯位址 (0x200000) 
     // 與真實載入位址 (0x80200000) 不符，導致存取到錯亂的絕對位址。
@@ -50,6 +64,11 @@ void timer_init(const void *fdt) {
     }
 
     sbi_set_timer(-1ULL); // 設定為無限遠未來，直到第一個計時器註冊
+
+#ifdef ENABLE_PERIODIC_TIMER
+    // 啟動第一顆 2 秒的計時器
+    add_timer(periodic_timer_callback, NULL, 10);
+#endif
 
     // 啟用 Supervisor Timer Interrupt Enable (STIE, bit 5)
     asm volatile("csrs sie, %0" : : "r"(1 << 5));
@@ -89,6 +108,7 @@ void add_timer(void (*callback)(void*), void* arg, int sec) {
 
 void handle_timer_interrupt(void) {
     unsigned long current_time;
+    uart_puts("[Timer] Handling Timer Interrupt!\r\n");
     
     while (!list_empty(&timer_list)) {
         current_time = rdtime();
@@ -100,9 +120,13 @@ void handle_timer_interrupt(void) {
             // 從串列上拔下來
             list_del(&head_node->list);
             
-            // 執行它被賦予的任務
+            // 為了實現 Decoupled Interrupt Handlers
+            // 這裡不再直接在 interrupt handler 內執行 callback (這原本是同步、blocking)，
+            // 而是將它註冊為高優先權的 Task，交給 run_tasks 在開啟 SIE 的環境下才非同步執行。
             if (head_node->callback) {
-                head_node->callback(head_node->arg);
+                // 給定一個極高優先權 (例如 10)，確保 Timer Callback 回去馬上能被搶佔執行
+                uart_puts("[Timer] Timeout completed! Added to Task Queue!\r\n");
+                add_task(head_node->callback, head_node->arg, 10);
             }
             
             // 回收記憶體
