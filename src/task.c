@@ -14,11 +14,13 @@ static struct task_node *task_queue_head = NULL;
 static int current_task_priority = -1;
 
 void add_task(task_callback_t callback, void *arg, int priority) {
-    // 1. Disable interrupts during enqueue to prevent concurrent queue mutations
+    // Disable interrupts during enqueue to prevent concurrent queue mutations
+    // Since this function might be called from both normal code and interrupt handlers
     unsigned long saved_sstatus;
     asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
     asm volatile("csrc sstatus, %0" : : "r"(1 << 1)); // Disable SIE
 
+    // Create a new task node
     struct task_node *new_node = (struct task_node *)allocate(sizeof(struct task_node));
     if (new_node) {
         new_node->callback = callback;
@@ -51,13 +53,12 @@ void run_tasks(void) {
         asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
         asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
 
-        if (!task_queue_head) {
-            // uart_puts("[Task] Queue is currently empty.\r\n");
+        if (!task_queue_head) { // task queue is empty
             asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
             break;
         }
-        // uart_puts("[Task] Not empty empty.\r\n");
-        if (task_queue_head->priority <= current_task_priority) {
+
+        if (task_queue_head->priority <= current_task_priority) { // No higher priority task to run
             asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
             break;
         }
@@ -71,7 +72,7 @@ void run_tasks(void) {
         // Re-enable interrupts to allow preemption during task execution
         asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
 
-        printf("[Task] Start executing task with priority %d\r\n", task->priority);
+        // printf("[Task] Start executing task with priority %d\r\n", task->priority);
 
         task->callback(task->arg);
 
