@@ -1,5 +1,7 @@
 .global handle_exception
 .align 2
+// since the last 2 bits of the stvec are used to indicate the mode (direct or vectored)
+// we need to align the stvec base addr to 4 bytes (2^2)
 handle_exception:
     /*
      * Retrieve kernel sp from sscratch and

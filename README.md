@@ -23,14 +23,15 @@ make qemu
 ├── lib/
 │   ├── align.c             // alignment 
 │   ├── align.h
-│   ├── endian.c            // bswap
-│   ├── endian.h
 │   ├── buddy.c             // memory buddy system
 │   ├── buddy.h
 │   ├── cpio.c              // the cpio parser for initramfs
 │   ├── cpio.h
+│   ├── endian.c            // bswap
+│   ├── endian.h
 │   ├── fdt.c               // the fdt parser for devicetree  
 │   ├── fdt.h
+│   ├── list.h              // intrustive double linked list lib
 │   ├── sbi.c
 │   ├── sbi.h
 │   ├── stdio.c             // printf
@@ -38,13 +39,23 @@ make qemu
 │   ├── string.c
 │   └── string.h
 ├── src/
-│   ├── config.h            // the macro define of different platform
-│   ├── kernel.its
-│   ├── link.ld
-│   ├── start.S
 │   ├── allocator.c         // memory allocator (chunk pool, startup allocation)
 │   ├── allocator.h
-│   └── uart.c
+│   ├── config.h            // the macro define of different platform
+│   ├── exception.c         // the do_trap() and exec()
+│   ├── exception.h
+│   ├── kernel.its
+│   ├── link.ld
+│   ├── plic.c              // the PLIC part of 
+│   ├── plic.h
+│   ├── start.S
+│   ├── task.c              // handle the add_task() and run_task()
+│   ├── task.h
+│   ├── timer.c             // add_timer() and handle_timer_interrupt()
+│   ├── timer.h
+│   ├── trap.S              // handle the assembly part in trap frame
+│   ├── uart.c              // the uart (async, polling, interrupt handler)
+│   └── uart.h
 ├── initramfs.cpio
 ├── main.c
 ├── Makefile
@@ -68,3 +79,11 @@ make qemu
   - reserved memory
   - buddy system
   - dynamic memory allocator (chunk < page size)
+- Exception and Interrupt
+  - software exception
+  - periodic timer interrupt
+  - async UART (PLIC UART interrupt)
+  - timer multiplexing
+  - concurrent I/O devices handling (add the interrupt to task)
+    - nested interrupt
+    - task preemption 
