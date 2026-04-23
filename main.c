@@ -224,49 +224,25 @@ void test_func(){
 }
 
 void start_kernel(unsigned long hartid, const void *fdt) {
-    // 1. 先初始化基礎 UART 與解析，確保可以呼叫 printf
+    // init uart base to enable printf
     init_uart_from_fdt(fdt);
     
-    // 2. Memory Allocator
+    // Memory Allocator
     allocator_init(fdt);
     
-    // 3. PLIC Init 與開啟對應的 UART IRQ Handler 機制
+    // PLIC Init open UART IRQ Handler
     plic_init(hartid, fdt);
     int uart_irq = uart_get_irq(fdt);
-    printf("PLIC initialized.\r\nUART IRQ: %d\r\n", uart_irq);
     plic_enable_interrupt(uart_irq);
 
-    // 4. Timer Init (內部會設定 sstatus.SIE 打開 Global Interrupts)
+    // Timer Init (sstatus.SIE open Global Interrupts)
     timer_init(fdt);
-
     printf("Hello from Main Kernel! Initialization done.\r\n");
 
-    // add_task(test_task_cb, "3", 3);
-    
-    // We add a long running Priority 1 task.
-    // Right after timer initialization, a timer is ticking. When the timer interrupts
-    // while this Priority 1 task is running, a Priority 10 task (Timer callback)
-    // will be enqueued and seamlessly PREEMPT this one!
-    // add_task(long_running_task_cb, NULL, 1);
-    
-    // add_task(test_task_cb, "2", 2);
-
-    // Call run_tasks() manually once to consume these initial tasks so we can see preemption happen!
-    // run_tasks();
-
-    // 5. 確保全部基礎建設準備完畢後，最後才把 UART 切換成 Interrupt mode (Async)
-    // 避免在啟動途中、甚至 timer_init 還沒正確把 CSR sstatus 等打開前，就卡在 wfi。
+    // enable the UART interrupt when we check the above is inti and open
     extern void uart_setup_interrupts(void);
     uart_setup_interrupts();
 
-    // We add a long running Priority 1 task.
-    // Right after timer initialization, a timer is ticking. When the timer interrupts
-    // while this Priority 1 task is running, a Priority 10 task (Timer callback)
-    // will be enqueued and seamlessly PREEMPT this one!
-    // add_task(long_running_task_cb, NULL, 1);
-    
-    // add_task(test_task_cb, "2", 2);
     add_timer(test_func, NULL, 0);
-    // printf("ttt\r\n");
     run_shell(hartid, fdt);
 }

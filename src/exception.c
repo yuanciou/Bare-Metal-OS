@@ -7,31 +7,34 @@
 #include "plic.h"
 #include "task.h"
 
+
 void do_trap(struct pt_regs* regs) {
-    if (regs->cause & (1ULL << 63)) { // 最高位元為 1 代表這是一個 Interrupt (hardware do automatically)
+    // Interrupt (hardware do automatically) if the MSB of scause is 1
+    if (regs->cause & (1ULL << 63)) {
+        // get the cause 
         unsigned long cause = regs->cause & ~(1ULL << 63);
-        if (cause == 5) { // 5 代表 Supervisor timer interrupt
+        if (cause == 5) { // Supervisor timer interrupt
             handle_timer_interrupt();
-        } else if (cause == 9) { // 9 代表 Supervisor external interrupt
+        } else if (cause == 9) { // Supervisor external interrupt
             int irq = plic_claim();
             if (irq == 0) {
-                // 如果抓到 0，代表發生了 Context 錯位的中斷風暴！
                 printf("FATAL: PLIC claimed IRQ 0! Context ID mismatch!\r\n");
-                while(1); // 死在這裡，讓你看清楚錯誤訊息
+                while(1);
             }
             if (irq > 0) {
                 extern int g_uart_irq;
-                if (irq == g_uart_irq) {
+                if (irq == g_uart_irq) { // UART IRQ
                     handle_uart_interrupt();
                 } else {
                     printf("Unknown external interrupt: %d\r\n", irq);
                 }
+                // complete the interrupt hadling and write the IRQ back
                 plic_complete(irq);
             }
         } else {
             printf("Unknown interrupt: %ld\r\n", cause);
         }
-    } else {
+    } else { // software exception (ecall from S-mode)
         printf("Exception:\r\n");
         printf("  scause: 0x%lx\r\n", regs->cause);
         printf("  sepc: 0x%lx\r\n", regs->epc);
@@ -39,8 +42,7 @@ void do_trap(struct pt_regs* regs) {
         regs->epc += 4; // to move past the ecall instruction
     }
 
-    // Before returning to the original interrupted context, execute the tasks that
-    // were added into the task queue by top-half handlers while interrupts were enabled.
+    // save the context to avoid another trap happens in run_task()
     unsigned long saved_sepc, saved_sstatus, saved_scause, saved_stval;
     asm volatile("csrr %0, sepc"   : "=r"(saved_sepc));
     asm volatile("csrr %0, sstatus": "=r"(saved_sstatus));
@@ -64,13 +66,22 @@ int exec(const char* filename, unsigned long initrd_start) {
         printf("Failed to find %s in initramfs\r\n", filename);
         return -1;
     }
-
+    // alloc a page for user stack
+    // + STACK_SIZE to point to the top of the stack (since the stack grows downwards)
     unsigned long stack_size = 4096;
     unsigned long user_sp = (unsigned long)allocate(stack_size) + stack_size;
 
+    // write the user program entry point to sepc
+    /*
+        - %0 in the asm volatile means the first input operand, which is "r"((unsigned long)data) in this case.
+        - "r" tells the compiler to put the value of ((unsigned long)data) into a general-purpose register,
+            so that csrw could read ((unsigned long)data) from the register
+    */
     asm volatile("csrw sepc, %0" : : "r"((unsigned long)data));
+
+    // save kernel sp to sscratch so that kernel could find its sp when trap happens
     asm volatile("csrw sscratch, sp");
-    asm volatile("mv sp, %0" : : "r"(user_sp));
+    asm volatile("mv sp, %0" : : "r"(user_sp)); // set sp to user stack
 
     // Enable SPIE but clear SPP (U-mode)
     asm volatile(

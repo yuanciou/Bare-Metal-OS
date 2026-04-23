@@ -13,6 +13,9 @@ struct task_node {
 static struct task_node *task_queue_head = NULL;
 static int current_task_priority = -1;
 
+/**
+ * @brief Add task to the task queue by turn off the innterupt to avoid concurrent modification
+ */
 void add_task(task_callback_t callback, void *arg, int priority) {
     // Disable interrupts during enqueue to prevent concurrent queue mutations
     // Since this function might be called from both normal code and interrupt handlers
@@ -46,6 +49,9 @@ void add_task(task_callback_t callback, void *arg, int priority) {
     asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
 }
 
+/**
+ * @brief Run task with the highest priority.
+ */
 void run_tasks(void) {
     while (1) {
         // Disable interrupts to safely check the queue
