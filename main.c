@@ -11,24 +11,6 @@
 #include "src/uart.h"
 #include "src/task.h"
 
-void test_task_cb(void *arg) {
-    uart_puts("[Task] Executing Priority ");
-    uart_puts((char*)arg);
-    uart_puts("\r\n");
-}
-
-void long_running_task_cb(void *arg) {
-    uart_puts("[Task] Long Priority 1 Task started. Busy waiting to catch Timer Interrupt...\r\n");
-    // Expand the busy wait duration significantly to guarantee catching multiple
-    // 2-second timer tick intervals so we explicitly demonstrate Preemption!
-    // enable interrupt temporarily for testing
-    asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
-    for (volatile int i = 0; i < 9000000; i++) {
-        for (volatile int j = 0; j < 600; j++);
-    }
-    uart_puts("[Task] Long Priority 1 Task finished.\r\n");
-}
-
 struct timeout_args {
     char *message;
     int duration;
@@ -178,50 +160,6 @@ void run_shell(unsigned long hartid, const void *fdt) {
         }
     }
 }
-int priority_set[4];
-
-void p1_callback(){
-    uart_puts("P1 start\n");
-    uart_puts("P1 end\n");
-}
-
-void p3_callback(){
-    uart_puts("P3 start\n");
-    add_task(p1_callback, NULL, priority_set[0]);
-    add_timer(NULL, NULL, 0);
-    uart_puts("P3 end\n");
-}
-
-void p2_callback(){
-    uart_puts("P2 start\n");
-    add_task(p3_callback, NULL, priority_set[2]);
-    add_timer(NULL, NULL, 0);
-    uart_puts("P2 end\n");
-}
-
-void p4_callback(){
-    uart_puts("P4 start\n");
-    add_task(p2_callback, NULL, priority_set[1]);
-    add_timer(NULL, NULL, 0);
-    uart_puts("P4 end\n");
-}
-
-void test_func(){
-    int from_small_to_big = 0; // set to 0 if the task with a smaller number has a higher priority
-    if(from_small_to_big){
-        priority_set[0] = 10;
-        priority_set[1] = 20;
-        priority_set[2] = 30;
-        priority_set[3] = 40;
-    }else{
-        priority_set[0] = 40;
-        priority_set[1] = 30;
-        priority_set[2] = 20;
-        priority_set[3] = 10;
-    }
-
-    add_task(p4_callback, NULL, priority_set[3]);
-}
 
 void start_kernel(unsigned long hartid, const void *fdt) {
     // init uart base to enable printf
@@ -240,9 +178,7 @@ void start_kernel(unsigned long hartid, const void *fdt) {
     printf("Hello from Main Kernel! Initialization done.\r\n");
 
     // enable the UART interrupt when we check the above is inti and open
-    extern void uart_setup_interrupts(void);
     uart_setup_interrupts();
 
-    add_timer(test_func, NULL, 0);
     run_shell(hartid, fdt);
 }
