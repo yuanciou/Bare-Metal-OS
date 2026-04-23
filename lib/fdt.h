@@ -11,6 +11,7 @@ int fdt_get_node_by_phandle(const void *fdt, uint32_t phandle);
 unsigned long fdt_totalsize(const void *fdt);
 unsigned long get_initrd_start(const void *fdt);
 unsigned long get_initrd_end(const void *fdt);
+unsigned long fdt_get_timebase_frequency(const void *fdt, unsigned long default_freq);
 unsigned long fdt_get_plic_base(const void* fdt);
 int uart_get_irq(const void* fdt);
 int fdt_get_reserved_memory_region(const void *fdt,

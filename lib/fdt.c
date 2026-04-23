@@ -525,6 +525,31 @@ int fdt_get_reserved_memory_region(const void *fdt,
 }
 
 /**
+ * @brief Find the timer frequency
+ */
+unsigned long fdt_get_timebase_frequency(const void *fdt, unsigned long default_freq) {
+    int len;
+    int cpus_offset;
+    const uint32_t *prop;
+
+    if (!fdt) {
+        return default_freq;
+    }
+
+    cpus_offset = fdt_path_offset(fdt, "/cpus");
+    if (cpus_offset < 0) {
+        return default_freq;
+    }
+
+    prop = (const uint32_t *)fdt_getprop(fdt, cpus_offset, "timebase-frequency", &len);
+    if (!prop || len < 4) {
+        return default_freq;
+    }
+
+    return (unsigned long)bswap32(*prop);
+}
+
+/**
  * @brief Find the offset of `phandle = <interrupt-patent value>`
  */
 int fdt_get_node_by_phandle(const void* fdt, uint32_t phandle) {
