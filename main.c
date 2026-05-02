@@ -5,110 +5,39 @@
 #include "lib/fdt.h"
 #include "config.h"
 #include "allocator.h"
+#include "src/exception.h"
+#include "src/timer.h"
+#include "src/plic.h"
+#include "src/uart.h"
+#include "src/task.h"
 
-extern char uart_getc(void);
-extern char uart_getc_raw(void);
-extern void uart_putc(char c);
-extern void uart_puts(const char* s);
-extern void uart_hex(unsigned long h);
+struct timeout_args {
+    char *message;
+    int duration;
+    unsigned long executed_time;
+};
 
-static void mem_alloc_demo(void) {
-    /***************** Case 2 *****************/
+static void timeout_callback(void* arg) {
+    struct timeout_args *targs = (struct timeout_args *)arg;
+    unsigned long current_time = get_time_in_seconds();
+    
+    // Asynchronous output from timer interrupt, so we might need to recreate the prompt 
+    // depending on the terminal layout, but here we just print what is requested.
+    printf("\r\n[%lu] setTimeout: %s (Command executed at: %lu, duration: %d seconds)\r\n# ", 
+           current_time, targs->message, targs->executed_time, targs->duration);
+    
+    // Free the duplicated string and standard argument node
+    free(targs->message);
+    free(targs);
+}
 
-    uart_puts("\n===== Part 1 =====\n");
-
-    void *p1 = allocate(129);
-    free(p1);
-
-    uart_puts("\n=== Part 1 End ===\n");
-
-    uart_puts("\n===== Part 2 =====\n");
-
-    // Allocate all blocks at order 0, 1, 2 and 3
-    int NUM_BLOCKS_AT_ORDER_0 = 3;  // Need modified
-    int NUM_BLOCKS_AT_ORDER_1 = 1;
-    int NUM_BLOCKS_AT_ORDER_2 = 1;
-    int NUM_BLOCKS_AT_ORDER_3 = 0;
-
-    void *ps0[NUM_BLOCKS_AT_ORDER_0];
-    void *ps1[NUM_BLOCKS_AT_ORDER_1];
-    void *ps2[NUM_BLOCKS_AT_ORDER_2];
-    void *ps3[NUM_BLOCKS_AT_ORDER_3];
-    for (int i = 0; i < NUM_BLOCKS_AT_ORDER_0; ++i) {
-        ps0[i] = allocate(4096);
+static int my_atoi(const char *str) {
+    int res = 0;
+    while (*str >= '0' && *str <= '9') {
+        res = res * 10 + (*str - '0');
+        str++;
     }
-    for (int i = 0; i < NUM_BLOCKS_AT_ORDER_1; ++i) {
-        ps1[i] = allocate(8192);
-    }
-    for (int i = 0; i < NUM_BLOCKS_AT_ORDER_2; ++i) {
-        ps2[i] = allocate(16384);
-    }
-    for (int i = 0; i < NUM_BLOCKS_AT_ORDER_3; ++i) {
-        ps3[i] = allocate(32768);
-    }
-
-    uart_puts("\n-----------\n");
-
-    long MAX_BLOCK_SIZE = PAGE_SIZE * (1 << BUDDY_MAX_ORDER);
-
-    /* **DO NOT** uncomment this section */
-    void *c1, *c2, *c3, *c4, *c5, *c6, *c7, *c8, *p2, *p3, *p4, *p5, *p6, *p7;
-
-    p1 = allocate(4095);
-    free(p1);                        // 4095
-    p1 = allocate(4095);
-
-    c1 = allocate(1000);
-    c2 = allocate(1023);
-    c3 = allocate(999);
-    c4 = allocate(1010);
-    free(c3);                        // 999
-    c5 = allocate(989);  
-    c3 = allocate(88);
-    c6 = allocate(1001);
-    free(c3);                        // 88
-    c7 = allocate(2045);
-    c8 = allocate(1);
-
-    p2 = allocate(4096);
-    free(c8);                        // 1
-    p3 = allocate(16000);
-    free(p1);                        // 4095
-    free(c7);                        // 2045
-    p4 = allocate(4097);
-    p5 = allocate(MAX_BLOCK_SIZE + 1);
-    p6 = allocate(MAX_BLOCK_SIZE);
-    free(p2);                        // 4096
-    free(p4);                        // 4097
-    p7 = allocate(7197);
-
-    free(p6);                        // MAX_BLOCK_SIZE
-    free(p3);                        // 16000
-    free(p7);                        // 7197
-    free(c1);                        // 1000
-    free(c6);                        // 1001
-    free(c2);                        // 1023
-    free(c5);                        // 989
-    free(c4);                        // 1010
-
-
-    uart_puts("\n-----------\n");
-
-    // Free all blocks remaining
-    for (int i = 0; i < NUM_BLOCKS_AT_ORDER_0; ++i) {
-        free(ps0[i]);
-    }
-    for (int i = 0; i < NUM_BLOCKS_AT_ORDER_1; ++i) {
-        free(ps1[i]);
-    }
-    for (int i = 0; i < NUM_BLOCKS_AT_ORDER_2; ++i) {
-        free(ps2[i]);
-    }
-    for (int i = 0; i < NUM_BLOCKS_AT_ORDER_3; ++i) {
-        free(ps3[i]);
-    }
-
-    uart_puts("\n=== Part 2 End ===\n");
+    return res;
 }
 
 void run_shell(unsigned long hartid, const void *fdt) {
@@ -143,7 +72,8 @@ void run_shell(unsigned long hartid, const void *fdt) {
             printf("  info - print system info.\r\n");
             printf("  ls - list files in initramfs.\r\n");
             printf("  cat [file] - print file content in initramfs.\r\n");
-            printf("  alloc-demo - run dynamic allocator demo case.\r\n");
+            printf("  exec [file] - execute user program in U-mode.\r\n");
+            printf("  setTimeout SECONDS MESSAGE - set a timeout with a message.\r\n");
         } else if (strcmp(buffer, "hello") == 0) {
             printf("Hello world.\r\n");
         } else if (strcmp(buffer, "info") == 0) {
@@ -173,8 +103,56 @@ void run_shell(unsigned long hartid, const void *fdt) {
             } else {
                 printf("Usage: cat [file]\r\n");
             }
-        } else if (strcmp(buffer, "alloc-demo") == 0) {
-            mem_alloc_demo();
+        } else if (buffer[0] == 'e' && buffer[1] == 'x' && buffer[2] == 'e' && buffer[3] == 'c') {
+            if (buffer[4] == ' ') {
+                if (initrd_start) {
+                    exec(buffer + 5, initrd_start);
+                } else {
+                    printf("No initrd found\r\n");
+                }
+            } else {
+                printf("Usage: exec [file]\r\n");
+            }
+        } else if (strncmp(buffer, "setTimeout ", 11) == 0) {
+            char *args = buffer + 11;
+            while (*args == ' ') args++;
+            
+            if (*args < '0' || *args > '9') {
+                printf("Usage: setTimeout SECONDS MESSAGE\r\n");
+                continue;
+            }
+            int sec = my_atoi(args);
+            
+            // Skip the numbers
+            while (*args >= '0' && *args <= '9') args++;
+            // Skip spaces between sec and message
+            while (*args == ' ') args++;
+            
+            if (*args == '\0') {
+                printf("Usage: setTimeout SECONDS MESSAGE\r\n");
+                continue;
+            }
+            
+            // Dynamically allocate memory for message (non-blocking shell will overwrite buffer)
+            int len = strlen(args);
+            char *msg_copy = (char *)allocate((unsigned long)(len + 1));
+            if (!msg_copy) {
+                printf("Failed to allocate memory for setTimeout\r\n");
+                continue;
+            }
+            strcpy(msg_copy, args);
+            
+            struct timeout_args *targs = (struct timeout_args *)allocate((unsigned long)sizeof(struct timeout_args));
+            if (!targs) {
+                free(msg_copy);
+                printf("Failed to allocate memory for setTimeout arguments\r\n");
+                continue;
+            }
+            targs->message = msg_copy;
+            targs->duration = sec;
+            targs->executed_time = get_time_in_seconds();
+            
+            add_timer(timeout_callback, targs, sec);
         } else {
             printf("Unknown command: ");
             printf(buffer);
@@ -184,9 +162,23 @@ void run_shell(unsigned long hartid, const void *fdt) {
 }
 
 void start_kernel(unsigned long hartid, const void *fdt) {
+    // init uart base to enable printf
     init_uart_from_fdt(fdt);
-    printf("Hello from Main Kernel!\r\n");
+    
+    // Memory Allocator
     allocator_init(fdt);
     
+    // PLIC Init open UART IRQ Handler
+    plic_init(hartid, fdt);
+    int uart_irq = uart_get_irq(fdt);
+    plic_enable_interrupt(uart_irq);
+
+    // Timer Init (sstatus.SIE open Global Interrupts)
+    timer_init(fdt);
+    printf("Hello from Main Kernel! Initialization done.\r\n");
+
+    // enable the UART interrupt when we check the above is inti and open
+    uart_setup_interrupts();
+
     run_shell(hartid, fdt);
 }

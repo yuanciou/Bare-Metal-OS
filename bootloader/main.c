@@ -1,5 +1,4 @@
 #include "lib/string.h"
-#include "lib/sbi.h"
 #include "lib/cpio.h"
 #include "lib/stdio.h"
 #include "lib/fdt.h"

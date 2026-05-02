@@ -4,11 +4,14 @@
 // The base address of the UART interface
 extern unsigned long uart_base_addr;
 
+// timer interrupt /2 second
+#define ENABLE_PERIODIC_TIMER 1
+
 // =======================================================================
 //                           Memory Allocator
 // =======================================================================
 // 1: print the buddy log; 0: disable the buddylog
-#define ALLOC_ENABLE_DEMO_LOG 1
+#define ALLOC_ENABLE_DEMO_LOG 0
 
 #define PAGE_SHIFT 12UL
 #define PAGE_SIZE (1UL << PAGE_SHIFT)
@@ -33,6 +36,9 @@ extern unsigned long uart_base_addr;
 // Orange Pi UART
 #define UART_RBR  (volatile unsigned int*)(uart_base_addr + 0x0)
 #define UART_THR  (volatile unsigned int*)(uart_base_addr + 0x0)
+#define UART_IER  (volatile unsigned int*)(uart_base_addr + 0x4)
+#define UART_IIR  (volatile unsigned int*)(uart_base_addr + 0x8)
+#define UART_MCR  (volatile unsigned int*)(uart_base_addr + 0x10)
 #define UART_LSR  (volatile unsigned int*)(uart_base_addr + 0x14)
 #define LSR_DR    (1 << 0)
 #define LSR_TDRQ  (1 << 5)
@@ -51,6 +57,9 @@ extern unsigned long uart_base_addr;
 // QEMU virt UART0 (16550A) addr
 #define UART_RBR  (volatile unsigned char*)(uart_base_addr + 0x0)
 #define UART_THR  (volatile unsigned char*)(uart_base_addr + 0x0)
+#define UART_IER  (volatile unsigned char*)(uart_base_addr + 0x1)
+#define UART_IIR  (volatile unsigned char*)(uart_base_addr + 0x2)
+#define UART_MCR  (volatile unsigned char*)(uart_base_addr + 0x4)
 #define UART_LSR  (volatile unsigned char*)(uart_base_addr + 0x5)
 #define LSR_DR    (1 << 0)
 #define LSR_TDRQ  (1 << 5)
