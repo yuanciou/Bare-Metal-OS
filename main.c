@@ -10,6 +10,7 @@
 #include "src/plic.h"
 #include "src/uart.h"
 #include "src/task.h"
+#include "src/thread.h"
 
 struct timeout_args {
     char *message;
@@ -38,6 +39,15 @@ static int my_atoi(const char *str) {
         str++;
     }
     return res;
+}
+
+void foo(void) {
+    for (int i = 0; i < 5; i++) {
+        printf("Thread id: %d %d\r\n", get_current()->pid, i);
+        for (int j = 0; j < 100000000; j++);
+        schedule();
+    }
+    thread_exit();
 }
 
 void run_shell(unsigned long hartid, const void *fdt) {
@@ -180,5 +190,15 @@ void start_kernel(unsigned long hartid, const void *fdt) {
     // enable the UART interrupt when we check the above is inti and open
     uart_setup_interrupts();
 
-    run_shell(hartid, fdt);
+    // Initialize thread mechanism and start testing
+    init_thread_system();
+
+    for (int i = 0; i < 3; i++) {
+        thread_create(foo);
+    }
+    
+    printf("Starting idle thread...\r\n");
+    idle();
+
+    // run_shell(hartid, fdt);
 }
