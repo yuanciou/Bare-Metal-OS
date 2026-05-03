@@ -267,6 +267,6 @@ void start_kernel(unsigned long hartid, const void *fdt) {
         thread_create(foo); 
     }
 
-    printf("Starting idle thread (PID: 0)... Tests will run, then shell will start.\r\n");
+    // printf("Starting idle thread (PID: 0)... Tests will run, then shell will start.\r\n");
     idle();
 }

@@ -14,14 +14,57 @@ long sys_getpid(void) {
     return get_current()->pid;
 }
 
+// long sys_uart_read(char *buf, long count) {
+//     long read_count = 0;
+//     while (read_count < count) {
+//         char c = uart_getc();
+//         buf[read_count++] = c;
+//     }
+//     return read_count;
+// }
 long sys_uart_read(char *buf, long count) {
     long read_count = 0;
+    
+    // 進入 syscall 時開啟中斷，允許 Timer 和 UART 觸發
+    asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
+
     while (read_count < count) {
-        char c = uart_getc();
-        buf[read_count++] = c;
+        int c;
+        // 嘗試非阻塞讀取。如果拿到 -1 代表沒字元可以讀。
+        while ((c = uart_getc_nonblocking()) == -1) {
+            // 沒字元就讓出 CPU，讓影片播放器等其他 Thread 繼續跑
+            schedule(); 
+        }
+        // 拿到了合法的字元，存進 buffer
+        buf[read_count++] = (char)c;
     }
+    
+    // 離開 syscall 前，把中斷關閉，恢復原本 trap handler 預期的狀態
+    asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
+    
     return read_count;
 }
+// long sys_uart_read(char *buf, long count) {
+//     long read_count = 0;
+    
+//     // 🚨 移除最外層的全局開啟中斷 (csrs)
+    
+//     while (read_count < count) {
+//         int c;
+//         // 在 SIE=0 的狀態下安全讀取 rx_ring
+//         while ((c = uart_getc_nonblocking()) == -1) {
+//             // 沒字元，開啟中斷並去睡覺，等待鍵盤敲擊喚醒
+//             asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
+//             schedule();
+//             // 醒來後立刻關閉中斷
+//             asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
+//         }
+//         buf[read_count++] = (char)c;
+//     }
+    
+//     // 🚨 移除最外層的全局關閉中斷 (csrc)
+//     return read_count;
+// }
 
 long sys_uart_write(const char *buf, long count) {
     long write_count = 0;
@@ -30,6 +73,51 @@ long sys_uart_write(const char *buf, long count) {
     }
     return write_count;
 }
+// 修改 syscall.c 中的 sys_uart_write
+// long sys_uart_write(const char *buf, long count) {
+//     long write_count = 0;
+    
+//     // 🚨 移除最外層的全局開啟中斷 (csrs)
+    
+//     while (write_count < count) {
+//         char c = buf[write_count];
+        
+//         if (c == '\n') {
+//             // uart_putc_nonblocking 現在是在 SIE=0 (關閉中斷) 的安全狀態下執行
+//             while (uart_putc_nonblocking('\r') == 0) {
+//                 // Buffer 滿了，進入等待狀態。
+//                 // 只有在這時候才開啟中斷，讓 UART THRI 中斷可以進來消耗 Buffer
+//                 asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
+//                 schedule(); // 讓出 CPU
+//                 // 醒來後立刻關閉中斷，重新進入安全的保護區
+//                 asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
+//             }
+//         }
+        
+//         while (uart_putc_nonblocking(c) == 0) {
+//             asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
+//             schedule();
+//             asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
+//         }
+        
+//         write_count++;
+//     }
+    
+//     // 🚨 移除最外層的全局關閉中斷 (csrc)
+//     return write_count;
+// }
+// long sys_uart_write(const char *buf, long count) {
+//     long write_count = 0;
+//     while (write_count < count) {
+//         char c = buf[write_count];
+//         if (c == '\n') {
+//             while (uart_putc_nonblocking('\r') == 0) schedule();
+//         }
+//         while (uart_putc_nonblocking(c) == 0) schedule();
+//         write_count++;
+//     }
+//     return write_count;
+// }
 
 int sys_exec(const char *path, struct pt_regs *regs) {
     const char *data = 0;
