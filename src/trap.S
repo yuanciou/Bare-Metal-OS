@@ -65,6 +65,8 @@ save_context:
     move a0, sp // which is the pointer to `struct pt_regs`
     call do_trap
 
+.global ret_from_exception
+ret_from_exception:
     // ------------------
     //   After do_trap()
     // ------------------

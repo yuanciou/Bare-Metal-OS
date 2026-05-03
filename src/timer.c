@@ -6,7 +6,7 @@
 #include "allocator.h"
 #include "config.h"
 #include "task.h"
-#include "uart.h"
+#include "thread.h"
 #include <stdint.h>
 
 unsigned long time_freq = TIMER_FREQ_DEFAULT;
@@ -148,4 +148,7 @@ void handle_timer_interrupt(void) {
     } else {
         sbi_set_timer(-1ULL);
     }
+
+    // Kernel preemption
+    schedule();
 }

@@ -6,11 +6,15 @@
 #include "uart.h"
 #include "plic.h"
 #include "task.h"
+#include "thread.h"
 
+
+void handle_syscall(struct pt_regs *regs);
 
 void do_trap(struct pt_regs* regs) {
     // Interrupt (hardware do automatically) if the MSB of scause is 1
     if (regs->cause & (1ULL << 63)) {
+
         // get the cause 
         unsigned long cause = regs->cause & ~(1ULL << 63);
         if (cause == 5) { // Supervisor timer interrupt
@@ -35,11 +39,19 @@ void do_trap(struct pt_regs* regs) {
             printf("Unknown interrupt: %ld\r\n", cause);
         }
     } else { // software exception (ecall from S-mode)
-        printf("Exception:\r\n");
-        printf("  scause: 0x%lx\r\n", regs->cause);
-        printf("  sepc: 0x%lx\r\n", regs->epc);
-        printf("  stval: 0x%lx\r\n", regs->badaddr);
-        regs->epc += 4; // to move past the ecall instruction
+        unsigned long cause = regs->cause;
+        if (cause == 8) { // User mode ecall (syscall)
+            handle_syscall(regs);
+            return; // Syscall dispatcher manually adjusted EPC, return right after
+        } else {
+            printf("Exception:\r\n");
+            printf("  scause: 0x%lx\r\n", regs->cause);
+            printf("  sepc: 0x%lx\r\n", regs->epc);
+            printf("  stval: 0x%lx\r\n", regs->badaddr);
+
+            // Do not advance EPC for unknown crashes. Terminate the faulty process.
+            thread_exit();
+        }
     }
 
     // save the context to avoid another trap happens in run_task()
@@ -68,15 +80,20 @@ int exec(const char* filename, unsigned long initrd_start) {
     }
     // alloc a page for user stack
     // + STACK_SIZE to point to the top of the stack (since the stack grows downwards)
-    unsigned long stack_size = 4096;
-    unsigned long user_sp = (unsigned long)allocate(stack_size) + stack_size;
+    unsigned long stack_size = USER_STACK_SIZE;
+    unsigned long user_stack_base = (unsigned long)allocate(stack_size);
+    unsigned long user_sp = user_stack_base + stack_size;
 
-    // write the user program entry point to sepc
-    /*
-        - %0 in the asm volatile means the first input operand, which is "r"((unsigned long)data) in this case.
-        - "r" tells the compiler to put the value of ((unsigned long)data) into a general-purpose register,
-            so that csrw could read ((unsigned long)data) from the register
-    */
+    thread* current = get_current();
+    if (current) {
+        current->user_stack = user_stack_base;
+    }
+
+    // Offset by -4 to counteract the epc += 4 advancing behaviour of the shell thread calling ecall? 
+    // Wait, the shell thread is currently executing exec directly from C in kernel mode!
+    // But if exec is called from user mode (sys_exec), it is handled via syscall.c.
+    // If it's called natively from the shell_thread via shell command "exec [file]", 
+    // the sret directly jumps to data. So data does not need - 4 here because we are not in a trap loop!
     asm volatile("csrw sepc, %0" : : "r"((unsigned long)data));
 
     // save kernel sp to sscratch so that kernel could find its sp when trap happens

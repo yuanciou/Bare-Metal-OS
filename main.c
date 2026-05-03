@@ -41,15 +41,35 @@ static int my_atoi(const char *str) {
     return res;
 }
 
-static unsigned long kernel_hartid;
-static const void *kernel_fdt;
+unsigned long kernel_hartid;
+const void *kernel_fdt;
 
 static volatile int completed_foo = 0;
 
+void run_shell(unsigned long hartid, const void *fdt);
 
 void shell_thread(void) {
     printf("\r\nStarting Shell (PID: %d)...\r\n", get_current()->pid);
     run_shell(kernel_hartid, kernel_fdt);
+    thread_exit();
+}
+
+void user_program_thread_wrapper(void) {
+    thread *cur = get_current();
+    char *filename = NULL;
+    if (cur) filename = cur->arg;
+
+    unsigned long initrd_start = get_initrd_start(kernel_fdt);
+
+    if (!filename) {
+        printf("No program specified for exec wrapper\r\n");
+        thread_exit();
+    }
+
+    exec(filename, initrd_start);
+
+    // If exec returns, free the filename and exit the thread
+    free(filename);
     thread_exit();
 }
 
@@ -136,7 +156,26 @@ void run_shell(unsigned long hartid, const void *fdt) {
         } else if (buffer[0] == 'e' && buffer[1] == 'x' && buffer[2] == 'e' && buffer[3] == 'c') {
             if (buffer[4] == ' ') {
                 if (initrd_start) {
-                    exec(buffer + 5, initrd_start);
+                    // Copy program name to heap so each thread has its own copy
+                    char *prog = (char *)allocate((unsigned long)(strlen(buffer + 5) + 1));
+                    if (!prog) {
+                        printf("Failed to allocate memory for program name\r\n");
+                        continue;
+                    }
+                    strcpy(prog, buffer + 5);
+
+                    thread *t = thread_create(user_program_thread_wrapper);
+                    if (!t) {
+                        free(prog);
+                        printf("Failed to create thread for program %s\r\n", prog);
+                        continue;
+                    }
+                    t->arg = prog;
+                    printf("Launched %s as PID: %d\r\n", prog, t->pid);
+                    // Non-blocking: shell continues immediately
+                    while (t->status != THREAD_TERMINATED && t->status != THREAD_ABORTED) {
+                        schedule(); // 把 CPU 讓給剛建立的 user_thread
+                    }
                 } else {
                     printf("No initrd found\r\n");
                 }
@@ -219,6 +258,9 @@ void start_kernel(unsigned long hartid, const void *fdt) {
     // (Deferred Shell Thread Creation)
     // We let the foo threads run first so shell doesn't block the CPU.
     // The last foo thread will create the shell thread.
+
+    // To test User Mode, uncomment the thread_create below or let the custom shell launch fork_test using exec
+    // thread_create(fork_test_thread);
 
     // Create foo threads for testing interleaving (PIDs 1, 2, 3)
     for (int i = 0; i < 3; i++) {

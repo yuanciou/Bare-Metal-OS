@@ -2,11 +2,12 @@
 #include "../lib/stdio.h"
 #include "../lib/string.h"
 #include "allocator.h"
+#include "exception.h"
 
-static int nr_threads = 0;
-static thread* run_queue = NULL;
+int nr_threads = 0;
+thread* run_queue = NULL;
 
-static void enqueue(thread** queue, thread* t) {
+void enqueue(thread** queue, thread* t) {
     if (*queue == NULL) {
         *queue = t;
         t->next = t;
@@ -40,7 +41,7 @@ void schedule(void) {
     thread* next = prev->next;
     thread* head = next;
 
-    while (next->status == THREAD_TERMINATED || next->status == THREAD_ABORTED) {
+    while (next->status == THREAD_TERMINATED || next->status == THREAD_ABORTED || next->status == THREAD_WAITING) {
         next = next->next;
         if (next == head) {
             next = run_queue; 
@@ -79,6 +80,10 @@ thread* thread_create(void (*threadfn)()) {
     t->status = THREAD_READY;
     t->kernel_stack = (unsigned long)allocate(KERNEL_STACK_SIZE);
     
+    t->parent = NULL;
+    t->waiting_pid = -1;
+    t->arg = NULL;
+
     // Setup initial context
     t->context.ra = (unsigned long)threadfn;
     t->context.sp = t->kernel_stack + KERNEL_STACK_SIZE;
@@ -91,6 +96,12 @@ void thread_exit(void) {
     thread* target = get_current();
     if (target) {
         target->status = THREAD_TERMINATED;
+        // Wake parent up if it was waiting for this process
+        if (target->parent != NULL && target->parent->status == THREAD_WAITING && 
+           (target->parent->waiting_pid == target->pid || target->parent->waiting_pid == -1)) {
+            target->parent->status = THREAD_READY;
+            target->parent->waiting_pid = -1;
+        }
     }
     schedule();
 }
@@ -114,6 +125,9 @@ void kill_zombies(void) {
             if (current->kernel_stack) {
                 free((void*)current->kernel_stack);
             }
+            if (current->user_stack) {
+                free((void*)current->user_stack);
+            }
             free(current);
             current = prev->next;
         } else {
@@ -123,6 +137,54 @@ void kill_zombies(void) {
     }
 
     asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+}
+
+extern void ret_from_exception(void);
+
+thread* user_process_create(void (*user_func)()) {
+    thread* t = (thread*)allocate(sizeof(thread));
+    if (!t) return NULL;
+    
+    char *tb = (char *)t;
+    for (unsigned long i = 0; i < sizeof(thread); i++) tb[i] = 0;
+
+    t->pid = nr_threads++;
+    t->status = THREAD_READY;
+
+    // Allocate kernel stack & user stack
+    t->kernel_stack = (unsigned long)allocate(KERNEL_STACK_SIZE);
+    t->kernel_sp = t->kernel_stack + KERNEL_STACK_SIZE;
+    
+    t->user_stack = (unsigned long)allocate(USER_STACK_SIZE);
+    t->user_sp = t->user_stack + USER_STACK_SIZE;
+
+    // Set up pt_regs on the kernel stack top
+    struct pt_regs *regs = (struct pt_regs *)(t->kernel_sp - sizeof(struct pt_regs));
+    char *reg_ptr = (char *)regs;
+    for (unsigned long i = 0; i < sizeof(struct pt_regs); i++) reg_ptr[i] = 0;
+
+    regs->tp = (unsigned long)t;
+    regs->epc = (unsigned long)user_func;
+    regs->sp = t->user_sp;
+    
+    // Enable SPIE and set SPP to 0 (U-mode)
+    regs->status |= (1 << 5);   // SPIE
+    // Note: status bit 8 is SPP, setting to 0 implies returning to U-mode, which is default by 0-init
+
+    // Enable SUM to allow accessing user memory if needed? In this basic context not strictly needed since no MMU but good practice.
+    // However SUM is bit 18, so maybe regs->status |= (1 << 18);
+    // The example sets sstatus bit 13 (FS) and 5 (SPIE), let's keep it simple.
+
+    // Thread context configuration
+    t->context.ra = (unsigned long)ret_from_exception;
+    t->context.sp = (unsigned long)regs;
+
+    t->parent = run_queue; // The caller or whoever is currently in run_queue
+    t->waiting_pid = -1;
+    t->arg = NULL;
+
+    enqueue(&run_queue, t);
+    return t;
 }
 
 // Ensure first schedule call works correctly
