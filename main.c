@@ -41,14 +41,34 @@ static int my_atoi(const char *str) {
     return res;
 }
 
+static unsigned long kernel_hartid;
+static const void *kernel_fdt;
+
+static volatile int completed_foo = 0;
+
+
+void shell_thread(void) {
+    printf("\r\nStarting Shell (PID: %d)...\r\n", get_current()->pid);
+    run_shell(kernel_hartid, kernel_fdt);
+    thread_exit();
+}
+
 void foo(void) {
     for (int i = 0; i < 5; i++) {
         printf("Thread id: %d %d\r\n", get_current()->pid, i);
         for (int j = 0; j < 100000000; j++);
         schedule();
     }
+    
+    // Count how many foo instances have finished
+    completed_foo++;
+    if (completed_foo == 3) {
+        // Once the last foo test completes, start the shell thread
+        thread_create(shell_thread);
+    }
     thread_exit();
 }
+
 
 void run_shell(unsigned long hartid, const void *fdt) {
     char buffer[256];
@@ -190,15 +210,21 @@ void start_kernel(unsigned long hartid, const void *fdt) {
     // enable the UART interrupt when we check the above is inti and open
     uart_setup_interrupts();
 
+    kernel_hartid = hartid;
+    kernel_fdt = fdt;
+
     // Initialize thread mechanism and start testing
-    init_thread_system();
+    init_thread_system(); // Creates idle thread as PID 0
 
+    // (Deferred Shell Thread Creation)
+    // We let the foo threads run first so shell doesn't block the CPU.
+    // The last foo thread will create the shell thread.
+
+    // Create foo threads for testing interleaving (PIDs 1, 2, 3)
     for (int i = 0; i < 3; i++) {
-        thread_create(foo);
+        thread_create(foo); 
     }
-    
-    printf("Starting idle thread...\r\n");
-    idle();
 
-    // run_shell(hartid, fdt);
+    printf("Starting idle thread (PID: 0)... Tests will run, then shell will start.\r\n");
+    idle();
 }
