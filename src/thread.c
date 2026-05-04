@@ -60,12 +60,24 @@ void schedule(void) {
     
     thread* next = prev->next;
     thread* head = next;
+    int found = 0;
 
-    while (next->status == THREAD_TERMINATED || next->status == THREAD_ABORTED || next->status == THREAD_WAITING) {
-        next = next->next;
-        if (next == head) {
-            next = run_queue; 
+    // Search for a runnable thread
+    while (1) {
+        if (next->status == THREAD_READY || next->status == THREAD_RUNNING) {
+            found = 1;
             break;
+        }
+        next = next->next;
+        if (next == head) break;
+    }
+
+    // If no runnable thread found, fallback to PID 0 (idle thread) which should always be READY/RUNNING
+    if (!found) {
+        next = run_queue;
+        while (next->pid != 0) {
+            next = next->next;
+            if (next == run_queue) break; // Should not happen if PID 0 exists
         }
     }
 
@@ -102,6 +114,7 @@ thread* thread_create(void (*threadfn)()) {
     
     t->parent = NULL;
     t->waiting_pid = -1;
+    t->current_task_priority = -1;
     t->arg = NULL;
 
     // Setup initial context
@@ -136,24 +149,49 @@ void kill_zombies(void) {
         return;
     }
 
-    thread *current = run_queue->next;
-    thread *prev = run_queue;
-    while (current != run_queue) {
-        if (current->status == THREAD_TERMINATED) {
-            current->status = THREAD_ABORTED;
-            prev->next = current->next;
-            if (current->kernel_stack) {
-                free((void*)current->kernel_stack);
+    thread *curr = run_queue;
+    thread *prev = NULL;
+    
+    // Find the tail first because it's a circular list and we might remove the head
+    thread *tail = run_queue;
+    while (tail->next != run_queue) {
+        tail = tail->next;
+    }
+    prev = tail;
+
+    int count = nr_threads; // Safety limit to prevent infinite loops if list is corrupted
+    while (count-- > 0 && run_queue != NULL) {
+        if (curr->status == THREAD_TERMINATED || curr->status == THREAD_ABORTED) {
+            thread *to_free = curr;
+            
+            if (to_free->next == to_free) {
+                // Only one element in the list
+                run_queue = NULL;
+            } else {
+                prev->next = to_free->next;
+                if (to_free == run_queue) {
+                    run_queue = to_free->next;
+                }
             }
-            if (current->user_stack) {
-                free((void*)current->user_stack);
+            
+            curr = to_free->next;
+            
+            if (to_free->kernel_stack) {
+                free((void*)to_free->kernel_stack);
             }
-            free(current);
-            current = prev->next;
+            if (to_free->user_stack) {
+                free((void*)to_free->user_stack);
+            }
+            free(to_free);
+            
+            if (run_queue == NULL) break;
         } else {
-            prev = current;
-            current = current->next;
+            prev = curr;
+            curr = curr->next;
         }
+        
+        // If we've come back to the beginning (or what is now the beginning), we're done
+        if (curr == run_queue) break;
     }
 
     asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
@@ -199,8 +237,9 @@ thread* user_process_create(void (*user_func)()) {
     t->context.ra = (unsigned long)ret_from_exception;
     t->context.sp = (unsigned long)regs;
 
-    t->parent = run_queue; // The caller or whoever is currently in run_queue
+    t->parent = get_current();
     t->waiting_pid = -1;
+    t->current_task_priority = -1;
     t->arg = NULL;
 
     enqueue(&run_queue, t);

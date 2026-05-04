@@ -23,6 +23,7 @@ typedef struct thread {
     struct thread* next;
     struct thread* parent;
     int waiting_pid;
+    int current_task_priority;
     char* arg;
 } thread;
 

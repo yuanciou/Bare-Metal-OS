@@ -214,13 +214,31 @@ void sys_exit(int status) {
 
 int sys_stop(long pid) {
     struct thread *node = run_queue;
+    thread *target = NULL;
     do {
         if (node->pid == pid) {
-            node->status = THREAD_ABORTED;
-            return 0;
+            target = node;
+            break;
         }
         node = node->next;
     } while (node != run_queue);
+    
+    if (target) {
+        target->status = THREAD_ABORTED;
+        
+        // Wake parent up if it was waiting for this process
+        if (target->parent != NULL && target->parent->status == THREAD_WAITING && 
+           (target->parent->waiting_pid == target->pid || target->parent->waiting_pid == -1)) {
+            target->parent->status = THREAD_READY;
+            target->parent->waiting_pid = -1;
+        }
+        
+        // If stopping self, must yield
+        if (target == get_current()) {
+            schedule();
+        }
+        return 0;
+    }
     return -1;
 }
 
