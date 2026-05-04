@@ -125,6 +125,8 @@ void run_shell(unsigned long hartid, const void *fdt) {
             printf("  cat [file] - print file content in initramfs.\r\n");
             printf("  exec [file] - execute user program in U-mode.\r\n");
             printf("  setTimeout SECONDS MESSAGE - set a timeout with a message.\r\n");
+            printf("  signal - register a signal handler.\r\n");
+            printf("  kill [pid] - send SIGTERM to a process.\r\n");
         } else if (strcmp(buffer, "hello") == 0) {
             printf("Hello world.\r\n");
         } else if (strcmp(buffer, "info") == 0) {
@@ -223,6 +225,22 @@ void run_shell(unsigned long hartid, const void *fdt) {
             targs->executed_time = get_time_in_seconds();
             
             add_timer(timeout_callback, targs, sec);
+        } else if (strcmp(buffer, "signal") == 0) {
+            // This is just to test if the syscall works from kernel mode too, 
+            // or if the user shell calls it.
+            // Requirement says "Type signal in the shell".
+            extern long sys_signal(int signum, void (*handler)());
+            // We don't have a real U-mode handler here, but we can't easily 
+            // register one from S-mode that runs in U-mode unless we have a U-mode address.
+            printf("signal command is usually for user shell.\r\n");
+        } else if (strncmp(buffer, "kill ", 5) == 0) {
+            int target_pid = my_atoi(buffer + 5);
+            extern int sys_kill(int pid, int signum);
+            if (sys_kill(target_pid, 15) == 0) {
+                printf("Sent SIGTERM to PID %d\r\n", target_pid);
+            } else {
+                printf("Failed to send signal to PID %d\r\n", target_pid);
+            }
         } else {
             printf("Unknown command: ");
             printf(buffer);

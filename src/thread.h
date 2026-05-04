@@ -1,6 +1,8 @@
 #ifndef THREAD_H
 #define THREAD_H
 
+#include "exception.h"
+
 #define KERNEL_STACK_SIZE 0x2000
 #define USER_STACK_SIZE 0x2000
 
@@ -25,6 +27,13 @@ typedef struct thread {
     int waiting_pid;
     int current_task_priority;
     char* arg;
+
+    // POSIX Signal fields
+    unsigned long signal_handler[32];
+    unsigned int sigpending;
+    int is_handling_signal;
+    struct pt_regs signal_saved_regs;
+    unsigned long signal_stack_page;
 } thread;
 
 void init_thread_system(void);

@@ -117,6 +117,12 @@ thread* thread_create(void (*threadfn)()) {
     t->current_task_priority = -1;
     t->arg = NULL;
 
+    // Initialize signal fields
+    for (int i = 0; i < 32; i++) t->signal_handler[i] = 0;
+    t->sigpending = 0;
+    t->is_handling_signal = 0;
+    t->signal_stack_page = 0;
+
     // Setup initial context
     t->context.ra = (unsigned long)threadfn;
     t->context.sp = t->kernel_stack + KERNEL_STACK_SIZE;
@@ -241,6 +247,12 @@ thread* user_process_create(void (*user_func)()) {
     t->waiting_pid = -1;
     t->current_task_priority = -1;
     t->arg = NULL;
+
+    // Initialize signal fields
+    for (int i = 0; i < 32; i++) t->signal_handler[i] = 0;
+    t->sigpending = 0;
+    t->is_handling_signal = 0;
+    t->signal_stack_page = 0;
 
     enqueue(&run_queue, t);
     return t;

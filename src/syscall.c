@@ -137,6 +137,12 @@ long sys_fork(struct pt_regs *parent_regs) {
     child->pid = nr_threads++;
     child->status = THREAD_READY;
     child->parent = parent;
+
+    // Signal state reset for child (clone handlers, but clear pending/stack)
+    child->sigpending = 0;
+    child->is_handling_signal = 0;
+    child->signal_stack_page = 0;
+    // handlers are already cloned by memcpy(child, parent, sizeof(thread))
     
     // Clone Kernel Stack
     child->kernel_stack = (unsigned long)allocate(KERNEL_STACK_SIZE);
@@ -242,6 +248,58 @@ int sys_stop(long pid) {
     return -1;
 }
 
+long sys_signal(int signum, void (*handler)()) {
+    if (signum < 0 || signum >= 32) return -1;
+    thread *current = get_current();
+    current->signal_handler[signum] = (unsigned long)handler;
+    return 0; // Return value is ignored per requirement
+}
+
+void sys_sigreturn(struct pt_regs *regs) {
+    thread *current = get_current();
+
+    if (current->signal_stack_page) {
+        free((void*)current->signal_stack_page);
+        current->signal_stack_page = 0;
+    }
+
+    *regs = current->signal_saved_regs;
+    current->is_handling_signal = 0;
+
+    printf("[INFO SIGRETURN] Signal handler finished (PID: %d)\r\n", current->pid);
+}
+
+int sys_kill(int pid, int signum) {
+    if (signum < 0 || signum >= 32 || pid <= 0) return -1;
+    
+    struct thread *node = run_queue;
+    thread *target = NULL;
+    do {
+        if (node->pid == pid) {
+            target = node;
+            break;
+        }
+        node = node->next;
+    } while (node != run_queue);
+
+    if (!target) return -1;
+
+    if (target->signal_handler[signum]) {
+        target->sigpending |= (1 << signum);
+    } else {
+        // Default behavior: terminate
+        target->status = THREAD_ABORTED;
+        
+        // Wake parent up if it was waiting for this process
+        if (target->parent != NULL && target->parent->status == THREAD_WAITING && 
+           (target->parent->waiting_pid == target->pid || target->parent->waiting_pid == -1)) {
+            target->parent->status = THREAD_READY;
+            target->parent->waiting_pid = -1;
+        }
+    }
+    return 0;
+}
+
 void handle_syscall(struct pt_regs *regs) {
     unsigned long syscall_num = regs->a7;
     unsigned long arg0 = regs->a0;
@@ -282,6 +340,15 @@ void handle_syscall(struct pt_regs *regs) {
             break;
         case 9:
             ret = sys_usleep((unsigned int)arg0);
+            break;
+        case 10:
+            ret = sys_signal((int)arg0, (void (*)())arg1);
+            break;
+        case 11:
+            sys_sigreturn(regs);
+            return; // Already restored context, skip epc += 4
+        case 12:
+            ret = sys_kill((int)arg0, (int)arg1);
             break;
         default:
             printf("Unknown syscall number: %ld\r\n", syscall_num);

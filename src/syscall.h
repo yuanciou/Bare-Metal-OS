@@ -12,6 +12,9 @@ long sys_fork(struct pt_regs *parent_regs);
 long sys_waitpid(long pid);
 void sys_exit(int status);
 int sys_stop(long pid);
+long sys_signal(int signum, void (*handler)());
+void sys_sigreturn(struct pt_regs *regs);
+int sys_kill(int pid, int signum);
 
 // Handle the syscall dispatched from exception
 void handle_syscall(struct pt_regs *regs);

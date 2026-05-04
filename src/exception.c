@@ -1,5 +1,6 @@
 #include "exception.h"
 #include "../lib/stdio.h"
+#include "../lib/string.h"
 #include "allocator.h"
 #include "../lib/cpio.h"
 #include "timer.h"
@@ -10,6 +11,42 @@
 
 
 void handle_syscall(struct pt_regs *regs);
+
+extern char sigreturn_stub[];
+extern char sigreturn_stub_end[];
+
+void check_signals(struct pt_regs *regs) {
+    thread *current = get_current();
+    if (current && current->sigpending != 0 && current->is_handling_signal == 0) {
+        for (int i = 0; i < 32; i++) {
+            if (current->sigpending & (1 << i)) {
+                current->sigpending &= ~(1 << i);
+                current->is_handling_signal = 1;
+
+                // Save current context
+                current->signal_saved_regs = *regs;
+
+                // Allocate signal stack
+                current->signal_stack_page = (unsigned long)allocate(4096);
+                
+                // Copy sigreturn trampoline to signal stack
+                unsigned long stub_size = (unsigned long)sigreturn_stub_end - (unsigned long)sigreturn_stub;
+                unsigned long trampoline = current->signal_stack_page + 4096 - stub_size;
+                memcpy((void*)trampoline, (void*)sigreturn_stub, stub_size);
+
+                // Flush I-cache for the trampoline
+                asm volatile("fence.i");
+
+                // Redirect to handler
+                regs->ra = trampoline;
+                regs->sp = trampoline;
+                regs->epc = current->signal_handler[i];
+                
+                break;
+            }
+        }
+    }
+}
 
 void do_trap(struct pt_regs* regs) {
     // Interrupt (hardware do automatically) if the MSB of scause is 1
@@ -42,6 +79,7 @@ void do_trap(struct pt_regs* regs) {
         unsigned long cause = regs->cause;
         if (cause == 8) { // User mode ecall (syscall)
             handle_syscall(regs);
+            check_signals(regs);
             return; // Syscall dispatcher manually adjusted EPC, return right after
         } else {
             printf("Exception:\r\n");
@@ -62,6 +100,8 @@ void do_trap(struct pt_regs* regs) {
     asm volatile("csrr %0, stval"  : "=r"(saved_stval));
 
     run_tasks(); // Will enable/disable SIE internally during tasks
+
+    check_signals(regs);
 
     asm volatile("csrc sstatus, %0" : : "r"(1 << 1)); // Disable SIE locally again just in case
     asm volatile("csrw sepc, %0"   : : "r"(saved_sepc));

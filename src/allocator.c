@@ -377,6 +377,7 @@ void *allocate(unsigned long size) {
         list_del(n);    // del from free list
         ck = list_entry(n, struct chunk, node); // use the node to get the chunk address
         chunk_size = g_pools[pool_idx].chunk_size;
+        (void)chunk_size;
 
         frame_array[addr_to_page_idx((unsigned long)ck)].ref_count++;
 
