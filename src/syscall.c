@@ -44,27 +44,6 @@ long sys_uart_read(char *buf, long count) {
     
     return read_count;
 }
-// long sys_uart_read(char *buf, long count) {
-//     long read_count = 0;
-    
-//     // 🚨 移除最外層的全局開啟中斷 (csrs)
-    
-//     while (read_count < count) {
-//         int c;
-//         // 在 SIE=0 的狀態下安全讀取 rx_ring
-//         while ((c = uart_getc_nonblocking()) == -1) {
-//             // 沒字元，開啟中斷並去睡覺，等待鍵盤敲擊喚醒
-//             asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
-//             schedule();
-//             // 醒來後立刻關閉中斷
-//             asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
-//         }
-//         buf[read_count++] = (char)c;
-//     }
-    
-//     // 🚨 移除最外層的全局關閉中斷 (csrc)
-//     return read_count;
-// }
 
 long sys_uart_write(const char *buf, long count) {
     long write_count = 0;
@@ -73,49 +52,35 @@ long sys_uart_write(const char *buf, long count) {
     }
     return write_count;
 }
-// 修改 syscall.c 中的 sys_uart_write
 // long sys_uart_write(const char *buf, long count) {
 //     long write_count = 0;
     
-//     // 🚨 移除最外層的全局開啟中斷 (csrs)
-    
+//     // 進入 syscall 時開啟中斷。
+//     // 這是必須的！因為如果沒有開啟中斷，UART 硬體傳完字元後無法觸發中斷來清空 Buffer，
+//     // 你的 tx_ring 就會永遠是滿的，導致死結！
+//     asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
+
 //     while (write_count < count) {
 //         char c = buf[write_count];
         
+//         // 處理換行字元 \n -> \r\n
 //         if (c == '\n') {
-//             // uart_putc_nonblocking 現在是在 SIE=0 (關閉中斷) 的安全狀態下執行
 //             while (uart_putc_nonblocking('\r') == 0) {
-//                 // Buffer 滿了，進入等待狀態。
-//                 // 只有在這時候才開啟中斷，讓 UART THRI 中斷可以進來消耗 Buffer
-//                 asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
-//                 schedule(); // 讓出 CPU
-//                 // 醒來後立刻關閉中斷，重新進入安全的保護區
-//                 asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
+//                 schedule(); // Buffer 滿了，讓出 CPU 給 Video Player 跑
 //             }
 //         }
         
+//         // 傳送實際的字元
 //         while (uart_putc_nonblocking(c) == 0) {
-//             asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
-//             schedule();
-//             asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
+//             schedule(); // Buffer 滿了，讓出 CPU
 //         }
         
 //         write_count++;
 //     }
     
-//     // 🚨 移除最外層的全局關閉中斷 (csrc)
-//     return write_count;
-// }
-// long sys_uart_write(const char *buf, long count) {
-//     long write_count = 0;
-//     while (write_count < count) {
-//         char c = buf[write_count];
-//         if (c == '\n') {
-//             while (uart_putc_nonblocking('\r') == 0) schedule();
-//         }
-//         while (uart_putc_nonblocking(c) == 0) schedule();
-//         write_count++;
-//     }
+//     // 離開 syscall 前，把中斷關閉，恢復原本 trap handler 預期的狀態
+//     asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
+    
 //     return write_count;
 // }
 
