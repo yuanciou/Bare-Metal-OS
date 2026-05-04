@@ -11,6 +11,7 @@
 #include "src/uart.h"
 #include "src/task.h"
 #include "src/thread.h"
+#include "src/video.h"
 
 struct timeout_args {
     char *message;
@@ -244,6 +245,10 @@ void start_kernel(unsigned long hartid, const void *fdt) {
 
     // Timer Init (sstatus.SIE open Global Interrupts)
     timer_init(fdt);
+    
+    // Video Init
+    video_init();
+
     printf("Hello from Main Kernel! Initialization done.\r\n");
 
     // enable the UART interrupt when we check the above is inti and open

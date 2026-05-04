@@ -3,9 +3,29 @@
 #include "../lib/string.h"
 #include "allocator.h"
 #include "exception.h"
+#include "timer.h"
 
 int nr_threads = 0;
 thread* run_queue = NULL;
+
+static void thread_wakeup_callback(void* arg) {
+    thread* t = (thread*)arg;
+    t->status = THREAD_READY;
+}
+
+int thread_sleep(unsigned int usec) {
+    thread* current = get_current();
+    if (!current) return -1;
+
+    current->status = THREAD_WAITING;
+    // usec to ticks: usec * time_freq / 1000000
+    if (add_timer_ticks(thread_wakeup_callback, current, (unsigned long)usec * time_freq / 1000000) != 0) {
+        current->status = THREAD_READY;
+        return -1;
+    }
+    schedule();
+    return 0;
+}
 
 void enqueue(thread** queue, thread* t) {
     if (*queue == NULL) {

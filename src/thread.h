@@ -36,6 +36,7 @@ void kill_zombies(void);
 thread* get_current(void);
 void switch_to(thread* prev, thread* next);
 void enqueue(thread** queue, thread* t);
+int thread_sleep(unsigned int usec);
 
 extern thread* run_queue;
 extern int nr_threads;

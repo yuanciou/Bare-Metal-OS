@@ -51,6 +51,15 @@ static void periodic_timer_callback(void* arg) {
 #endif
 
 /**
+ * @brief Periodic timer for scheduling (1/32s)
+ */
+static void scheduler_timer_callback(void* arg) {
+    // Reprogram for next 1/32s
+    // 1/32s = time_freq / 32 ticks
+    add_timer_ticks(scheduler_timer_callback, NULL, time_freq / 32);
+}
+
+/**
  * @brief Init the timer
  */
 void timer_init(const void *fdt) {
@@ -68,6 +77,9 @@ void timer_init(const void *fdt) {
     add_timer(periodic_timer_callback, NULL, 10);
 #endif
 
+    // Add the 1/32s scheduler timer
+    add_timer_ticks(scheduler_timer_callback, NULL, time_freq / 32);
+
     // turn on Supervisor Timer Interrupt Enable (STIE, bit 5)
     asm volatile("csrs sie, %0" : : "r"(1 << 5));
 
@@ -76,16 +88,30 @@ void timer_init(const void *fdt) {
 }
 
 /**
- * @brief Add a timer to the timer list
+ * @brief Add a timer to the timer list (in seconds)
  */
 void add_timer(void (*callback)(void*), void* arg, int sec) {
-    // change the relative sec to absolute expire time cycle
+    add_timer_ticks(callback, arg, (unsigned long)sec * time_freq);
+}
+
+/**
+ * @brief Add a timer to the timer list (in milliseconds)
+ */
+void add_timer_ms(void (*callback)(void*), void* arg, int ms) {
+    add_timer_ticks(callback, arg, (unsigned long)ms * time_freq / 1000);
+}
+
+/**
+ * @brief Add a timer to the timer list (in ticks)
+ */
+int add_timer_ticks(void (*callback)(void*), void* arg, unsigned long ticks) {
+    // change the relative ticks to absolute expire time cycle
     unsigned long current_time = rdtime();
-    unsigned long expire_time = current_time + (unsigned long)sec * time_freq;
+    unsigned long expire_time = current_time + ticks;
     
     // allocate a space for timer_node
     struct timer_node *new_node = (struct timer_node *)allocate(sizeof(struct timer_node));
-    if (!new_node) return;
+    if (!new_node) return -1;
     new_node->expire_time = expire_time;
     new_node->callback = callback;
     new_node->arg = arg;
@@ -108,6 +134,7 @@ void add_timer(void (*callback)(void*), void* arg, int sec) {
     if (timer_list.next == &new_node->list) {
         sbi_set_timer(expire_time);
     }
+    return 0;
 }
 
 /**

@@ -6,12 +6,21 @@
 #include "allocator.h"
 #include "uart.h"
 #include "../lib/string.h"
+#include "video.h"
 
 extern thread* run_queue;
 extern void ret_from_exception(void);
 
 long sys_getpid(void) {
     return get_current()->pid;
+}
+
+void sys_display(unsigned int *bmp_image, unsigned int width, unsigned int height) {
+    video_bmp_display(bmp_image, width, height);
+}
+
+int sys_usleep(unsigned int usec) {
+    return thread_sleep(usec);
 }
 
 // long sys_uart_read(char *buf, long count) {
@@ -248,6 +257,13 @@ void handle_syscall(struct pt_regs *regs) {
             break;
         case 7:
             ret = sys_stop(arg0);
+            break;
+        case 8:
+            sys_display((unsigned int *)arg0, (unsigned int)arg1, (unsigned int)regs->a2);
+            ret = 0;
+            break;
+        case 9:
+            ret = sys_usleep((unsigned int)arg0);
             break;
         default:
             printf("Unknown syscall number: %ld\r\n", syscall_num);
