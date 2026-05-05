@@ -43,10 +43,10 @@ unsigned long get_time_in_seconds(void) {
  */
 #ifdef ENABLE_PERIODIC_TIMER
 static void periodic_timer_callback(void* arg) {
-    // printf("[Timer] %lu seconds passed since boot.\r\n", get_time_in_seconds());
+    printf("[Timer] %lu seconds passed since boot.\r\n", get_time_in_seconds());
 
     // Reprogram the timer for the next 2 seconds
-    add_timer(periodic_timer_callback, NULL, 10);
+    add_timer(periodic_timer_callback, NULL, 2);
 }
 #endif
 
@@ -74,7 +74,7 @@ void timer_init(const void *fdt) {
 
 #ifdef ENABLE_PERIODIC_TIMER
     // add the first prriodic timer
-    add_timer(periodic_timer_callback, NULL, 10);
+    add_timer(periodic_timer_callback, NULL, 2);
 #endif
 
     // Add the 1/32s scheduler timer

@@ -101,6 +101,20 @@ void idle(void) {
     }
 }
 
+void kernel_thread_wrapper() {
+    // 1. Enable interrupts (SIE = 1)
+    asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
+
+    // 2. Execute the entry function
+    thread *current = get_current();
+    if (current && current->entry_func) {
+        current->entry_func();
+    }
+
+    // 3. Exit the thread if the entry function returns
+    thread_exit();
+}
+
 thread* thread_create(void (*threadfn)()) {
     thread* t = (thread*)allocate(sizeof(thread));
     if (!t) return NULL;
@@ -116,6 +130,7 @@ thread* thread_create(void (*threadfn)()) {
     t->waiting_pid = -1;
     t->current_task_priority = -1;
     t->arg = NULL;
+    t->entry_func = threadfn;
 
     // Initialize signal fields
     for (int i = 0; i < 32; i++) t->signal_handler[i] = 0;
@@ -123,8 +138,8 @@ thread* thread_create(void (*threadfn)()) {
     t->is_handling_signal = 0;
     t->signal_stack_page = 0;
 
-    // Setup initial context
-    t->context.ra = (unsigned long)threadfn;
+    // Setup initial context to use the wrapper
+    t->context.ra = (unsigned long)kernel_thread_wrapper;
     t->context.sp = t->kernel_stack + KERNEL_STACK_SIZE;
 
     enqueue(&run_queue, t);

@@ -27,6 +27,7 @@ typedef struct thread {
     int waiting_pid;
     int current_task_priority;
     char* arg;
+    void (*entry_func)();
 
     // POSIX Signal fields
     unsigned long signal_handler[32];
