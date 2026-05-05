@@ -52,10 +52,9 @@ void run_shell(unsigned long hartid, const void *fdt);
 void shell_thread(void) {
     printf("\r\nStarting Shell (PID: %d)...\r\n", get_current()->pid);
     run_shell(kernel_hartid, kernel_fdt);
-    thread_exit();
 }
 
-void user_program_thread_wrapper(void) {
+void user_program_loader(void) {
     thread *cur = get_current();
     char *filename = NULL;
     if (cur) filename = cur->arg;
@@ -64,14 +63,13 @@ void user_program_thread_wrapper(void) {
 
     if (!filename) {
         printf("No program specified for exec wrapper\r\n");
-        thread_exit();
+        return;
     }
 
-    exec(filename, initrd_start);
-
-    // If exec returns, free the filename and exit the thread
-    free(filename);
-    thread_exit();
+    if (exec(filename, initrd_start) < 0) {
+        // If exec fails, free the filename (otherwise exec replaces the context and doesn't return)
+        free(filename);
+    }
 }
 
 void foo(void) {
@@ -87,7 +85,6 @@ void foo(void) {
         // Once the last foo test completes, start the shell thread
         thread_create(shell_thread);
     }
-    thread_exit();
 }
 
 
@@ -167,7 +164,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
                     }
                     strcpy(prog, buffer + 5);
 
-                    thread *t = thread_create(user_program_thread_wrapper);
+                    thread *t = thread_create(user_program_loader);
                     if (!t) {
                         free(prog);
                         printf("Failed to create thread for program %s\r\n", prog);
