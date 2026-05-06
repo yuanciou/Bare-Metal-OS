@@ -12,7 +12,7 @@ extern thread* run_queue;
 extern void ret_from_exception(void);
 
 long sys_getpid(void) {
-    return get_current()->pid;
+    return get_cur_thread()->pid;
 }
 
 void sys_display(unsigned int *bmp_image, unsigned int width, unsigned int height) {
@@ -110,7 +110,7 @@ int sys_exec(const char *path, struct pt_regs *regs) {
         return -1;
     }
     
-    thread *current = get_current();
+    thread *current = get_cur_thread();
     
     // Re-initialize user stack securely
     if (current->user_stack) {
@@ -124,7 +124,7 @@ int sys_exec(const char *path, struct pt_regs *regs) {
 }
 
 long sys_fork(struct pt_regs *parent_regs) {
-    thread* parent = get_current();
+    thread* parent = get_cur_thread();
     
     thread* child = (thread*)allocate(sizeof(thread));
     if (!child) return -1;
@@ -183,7 +183,7 @@ long sys_fork(struct pt_regs *parent_regs) {
 }
 
 long sys_waitpid(long pid) {
-    thread *current = get_current();
+    thread *current = get_cur_thread();
     struct thread *node = run_queue;
     
     // Is it existing?
@@ -240,7 +240,7 @@ int sys_stop(long pid) {
         }
         
         // If stopping self, must yield
-        if (target == get_current()) {
+        if (target == get_cur_thread()) {
             schedule();
         }
         return 0;
@@ -250,13 +250,13 @@ int sys_stop(long pid) {
 
 long sys_signal(int signum, void (*handler)()) {
     if (signum < 0 || signum >= 32) return -1;
-    thread *current = get_current();
+    thread *current = get_cur_thread();
     current->signal_handler[signum] = (unsigned long)handler;
     return 0; // Return value is ignored per requirement
 }
 
 void sys_sigreturn(struct pt_regs *regs) {
-    thread *current = get_current();
+    thread *current = get_cur_thread();
 
     if (current->signal_stack_page) {
         free((void*)current->signal_stack_page);

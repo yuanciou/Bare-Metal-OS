@@ -13,7 +13,7 @@ char uart_getc(void);
 char uart_getc_raw(void);
 void uart_puts(const char* s);
 int uart_getc_nonblocking();
-int uart_putc_nonblocking(char c);
+// int uart_putc_nonblocking(char c);
 void uart_hex(unsigned long h);
 void handle_uart_interrupt(void);
 

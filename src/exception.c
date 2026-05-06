@@ -16,7 +16,7 @@ extern char sigreturn_stub[];
 extern char sigreturn_stub_end[];
 
 void check_signals(struct pt_regs *regs) {
-    thread *current = get_current();
+    thread *current = get_cur_thread();
     if (current && current->sigpending != 0 && current->is_handling_signal == 0) {
         for (int i = 0; i < 32; i++) {
             if (current->sigpending & (1 << i)) {
@@ -124,7 +124,7 @@ int exec(const char* filename, unsigned long initrd_start) {
     unsigned long user_stack_base = (unsigned long)allocate(stack_size);
     unsigned long user_sp = user_stack_base + stack_size;
 
-    thread* current = get_current();
+    thread* current = get_cur_thread();
     if (current) {
         current->user_stack = user_stack_base;
     }

@@ -50,12 +50,12 @@ static volatile int completed_foo = 0;
 void run_shell(unsigned long hartid, const void *fdt);
 
 void shell_thread(void) {
-    printf("\r\nStarting Shell (PID: %d)...\r\n", get_current()->pid);
+    printf("\r\nStarting Shell (PID: %d)...\r\n", get_cur_thread()->pid);
     run_shell(kernel_hartid, kernel_fdt);
 }
 
 void user_program_loader(void) {
-    thread *cur = get_current();
+    thread *cur = get_cur_thread();
     char *filename = NULL;
     if (cur) filename = cur->arg;
 
@@ -72,20 +72,20 @@ void user_program_loader(void) {
     }
 }
 
-void foo(void) {
-    for (int i = 0; i < 5; i++) {
-        printf("Thread id: %d %d\r\n", get_current()->pid, i);
-        for (int j = 0; j < 100000000; j++);
-        schedule();
-    }
+// void foo(void) {
+//     for (int i = 0; i < 5; i++) {
+//         printf("Thread id: %d %d\r\n", get_cur_thread()->pid, i);
+//         for (int j = 0; j < 100000000; j++);
+//         schedule();
+//     }
     
-    // Count how many foo instances have finished
-    completed_foo++;
-    if (completed_foo == 3) {
-        // Once the last foo test completes, start the shell thread
-        thread_create(shell_thread);
-    }
-}
+//     // Count how many foo instances have finished
+//     completed_foo++;
+//     if (completed_foo == 3) {
+//         // Once the last foo test completes, start the shell thread
+//         thread_create(shell_thread);
+//     }
+// }
 
 
 void run_shell(unsigned long hartid, const void *fdt) {
@@ -282,10 +282,11 @@ void start_kernel(unsigned long hartid, const void *fdt) {
     // To test User Mode, uncomment the thread_create below or let the custom shell launch fork_test using exec
     // thread_create(fork_test_thread);
 
-    // Create foo threads for testing interleaving (PIDs 1, 2, 3)
-    for (int i = 0; i < 3; i++) {
-        thread_create(foo); 
-    }
+    // // Create foo threads for testing interleaving (PIDs 1, 2, 3)
+    // for (int i = 0; i < 3; i++) {
+    //     thread_create(foo); 
+    // }
+    thread_create(shell_thread);
 
     // printf("Starting idle thread (PID: 0)... Tests will run, then shell will start.\r\n");
     idle();

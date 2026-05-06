@@ -53,7 +53,7 @@ void add_task(task_callback_t callback, void *arg, int priority) {
  * @brief Run task with the highest priority.
  */
 void run_tasks(void) {
-    thread *current = get_current();
+    thread *current = get_cur_thread();
     // Fallback for cases where thread system might not be fully up or during early init
     int *task_priority_ptr;
     static int fallback_priority = -1;
