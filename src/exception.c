@@ -129,11 +129,7 @@ int exec(const char* filename, unsigned long initrd_start) {
         current->user_stack = user_stack_base;
     }
 
-    // Offset by -4 to counteract the epc += 4 advancing behaviour of the shell thread calling ecall? 
-    // Wait, the shell thread is currently executing exec directly from C in kernel mode!
-    // But if exec is called from user mode (sys_exec), it is handled via syscall.c.
-    // If it's called natively from the shell_thread via shell command "exec [file]", 
-    // the sret directly jumps to data. So data does not need - 4 here because we are not in a trap loop!
+    // set data (user program start) to sepc so that sret will jump to the user program
     asm volatile("csrw sepc, %0" : : "r"((unsigned long)data));
 
     // save kernel sp to sscratch so that kernel could find its sp when trap happens
@@ -142,9 +138,9 @@ int exec(const char* filename, unsigned long initrd_start) {
 
     // Enable SPIE but clear SPP (U-mode)
     asm volatile(
-        "li t0, (1 << 8);" // SSTATUS_SPP
+        "li t0, (1 << 8);" // SSTATUS_SPP (U-mode)
         "csrc sstatus, t0;"
-        "li t0, (1 << 5);" // SSTATUS_SPIE
+        "li t0, (1 << 5);" // SSTATUS_SPIE (hardware interrupt)
         "csrs sstatus, t0;"
     );
 

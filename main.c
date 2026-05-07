@@ -157,6 +157,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
             if (buffer[4] == ' ') {
                 if (initrd_start) {
                     // Copy program name to heap so each thread has its own copy
+                    // or the program name may be overwritten by the next shell command before exec uses it.
                     char *prog = (char *)allocate((unsigned long)(strlen(buffer + 5) + 1));
                     if (!prog) {
                         printf("Failed to allocate memory for program name\r\n");
@@ -174,7 +175,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
                     printf("Launched %s as PID: %d\r\n", prog, t->pid);
                     // Non-blocking: shell continues immediately
                     while (t->status != THREAD_TERMINATED && t->status != THREAD_ABORTED) {
-                        schedule(); // 把 CPU 讓給剛建立的 user_thread
+                        schedule(); // yield the CPU to the just-created thread
                     }
                 } else {
                     printf("No initrd found\r\n");

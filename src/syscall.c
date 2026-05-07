@@ -8,52 +8,92 @@
 #include "../lib/string.h"
 #include "video.h"
 
+// ======================================================================
+//                               Syscall
+// ----------------------------------------------------------------------
+/*
+0: long getpid()
+Return the current process’s pid.
+
+1: long uart_read(char *buf, long count)
+Read count bytes into buf. Return the number of bytes read.
+
+2: long uart_write(const char *buf, long count)
+Write count bytes from buf. Return the number of bytes written.
+
+3: int exec(const char *path)
+Load and execute the program specified by path. Return 0 on success, -1 on failure.
+
+4: long fork()
+Duplicate the current process. Return the child’s pid to the parent, and 0 to the child.
+
+5: long waitpid(long pid)
+Wait for the process identified by pid to finish. Return the pid of the finished process.
+
+6: void exit(int status)
+Terminate the current process. The status can be used to indicate the exit reason, but it is not required in this lab.
+
+7: int stop(long pid)
+Terminate the process identified by pid. Return 0 on success, -1 on failure.
+
+8: void display(unsigned int *bmp_image, unsigned int width, unsigned int height)
+Display the video.
+
+9: int usleep(unsigned int usec)
+Sleep for a specified number of microseconds. Return 0 on success, -1 on failure.
+
+10: long signal(int signum, void (*handler)())
+Register a user-space handler for the given signal. The handler must run in U-mode. The return value is the previous handler for the signal, you can ignore it in this lab.
+
+11: void sigreturn()
+Restore the original user context after a signal handler returns. This syscall is called automatically via a trampoline set by the kernel. The kernel also recycles the signal stack upon completion.
+
+12: int kill(int pid, int signum)
+Send a signal to the process identified by pid. If the process has a registered handler for the signal, the handler is executed. Otherwise, the process is terminated by default. Return 0 on success, -1 on failure.
+*/
+// ======================================================================
+
 extern thread* run_queue;
 extern void ret_from_exception(void);
 
+/**
+ * @brief 0: Run task with the highest priority.
+ */
 long sys_getpid(void) {
     return get_cur_thread()->pid;
 }
 
-void sys_display(unsigned int *bmp_image, unsigned int width, unsigned int height) {
-    video_bmp_display(bmp_image, width, height);
-}
-
-int sys_usleep(unsigned int usec) {
-    return thread_sleep(usec);
-}
-
-// long sys_uart_read(char *buf, long count) {
-//     long read_count = 0;
-//     while (read_count < count) {
-//         char c = uart_getc();
-//         buf[read_count++] = c;
-//     }
-//     return read_count;
-// }
+/**
+ * @brief 1: Read count bytes into buf. 
+ * @return The number of bytes read.
+ */
 long sys_uart_read(char *buf, long count) {
     long read_count = 0;
     
-    // 進入 syscall 時開啟中斷，允許 Timer 和 UART 觸發
+    // enable interrupt to allow UART and timer interrupts during read
     asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
 
     while (read_count < count) {
         int c;
-        // 嘗試非阻塞讀取。如果拿到 -1 代表沒字元可以讀。
+        // -1: no char to read
         while ((c = uart_getc_nonblocking()) == -1) {
-            // 沒字元就讓出 CPU，讓影片播放器等其他 Thread 繼續跑
+            // no char available -> yield the CPU
             schedule(); 
         }
-        // 拿到了合法的字元，存進 buffer
+        // read char into buffer
         buf[read_count++] = (char)c;
     }
     
-    // 離開 syscall 前，把中斷關閉，恢復原本 trap handler 預期的狀態
+    // disable interrupt after read and back to do_trap()
     asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
     
     return read_count;
 }
 
+/**
+ * @brief 2: Write count bytes from buf. 
+ * @return The number of bytes written.
+ */
 long sys_uart_write(const char *buf, long count) {
     long write_count = 0;
     while (write_count < count) {
@@ -61,45 +101,16 @@ long sys_uart_write(const char *buf, long count) {
     }
     return write_count;
 }
-// long sys_uart_write(const char *buf, long count) {
-//     long write_count = 0;
-    
-//     // 進入 syscall 時開啟中斷。
-//     // 這是必須的！因為如果沒有開啟中斷，UART 硬體傳完字元後無法觸發中斷來清空 Buffer，
-//     // 你的 tx_ring 就會永遠是滿的，導致死結！
-//     asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
 
-//     while (write_count < count) {
-//         char c = buf[write_count];
-        
-//         // 處理換行字元 \n -> \r\n
-//         if (c == '\n') {
-//             while (uart_putc_nonblocking('\r') == 0) {
-//                 schedule(); // Buffer 滿了，讓出 CPU 給 Video Player 跑
-//             }
-//         }
-        
-//         // 傳送實際的字元
-//         while (uart_putc_nonblocking(c) == 0) {
-//             schedule(); // Buffer 滿了，讓出 CPU
-//         }
-        
-//         write_count++;
-//     }
-    
-//     // 離開 syscall 前，把中斷關閉，恢復原本 trap handler 預期的狀態
-//     asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
-    
-//     return write_count;
-// }
-
+/**
+ * @brief 3: Load and execute the program specified by path.
+ * @return 0 on success, -1 on failure.
+ */
 int sys_exec(const char *path, struct pt_regs *regs) {
     const char *data = 0;
     int size = 0;
-    
-    // We retrieve the initrd start mapped earlier if not supplied, we can access via external scope if required.
-    // For now we get it from FDT, but let's assume get_initrd_start() handles this or we define a generic fallback.
-    // Wait, the example exec gets the entry point directly.
+
+    // set `data` to the start addr of the user program
     extern const void *kernel_fdt;
     extern unsigned long get_initrd_start(const void *fdt);
     
@@ -113,16 +124,25 @@ int sys_exec(const char *path, struct pt_regs *regs) {
     thread *current = get_cur_thread();
     
     // Re-initialize user stack securely
+    // Instead of changing the sp on hardware directly, 
+    // we modify the `pt_regs` snapshot on kernel stack when interrupt occur
+    // since after interrupt (do_trap()), the sret will restore the context from `pt_regs` and jump to the new user program.
     if (current->user_stack) {
         regs->sp = current->user_stack + USER_STACK_SIZE; // reset stack
     }
     
-    // Offset by -4 to counteract the epc += 4 advancing behaviour of the trap dispatcher!
+    // since the do_trap() will do epc += 4 to next instr,
+    // but we want to jump to the start od the new user program
+    // Offset by -4 to counteract the epc += 4 advancing behaviour of the trap dispatcher
     regs->epc = (unsigned long)data - 4;
     
     return 0; // Return value is irrelevant since we changed flow
 }
 
+/**
+ * @brief 4: Duplicate the current process.
+ * @return the child’s pid to the parent, and 0 to the child.
+ */
 long sys_fork(struct pt_regs *parent_regs) {
     thread* parent = get_cur_thread();
     
@@ -132,10 +152,11 @@ long sys_fork(struct pt_regs *parent_regs) {
     // Exact clone of task structs layout
     memcpy(child, parent, sizeof(thread));
     
-    // Reset pid and links
+    // Reset the childs pid and links
     extern int nr_threads;
     child->pid = nr_threads++;
     child->status = THREAD_READY;
+    // set parent-child relationship
     child->parent = parent;
 
     // Signal state reset for child (clone handlers, but clear pending/stack)
@@ -144,15 +165,17 @@ long sys_fork(struct pt_regs *parent_regs) {
     child->signal_stack_page = 0;
     // handlers are already cloned by memcpy(child, parent, sizeof(thread))
     
-    // Clone Kernel Stack
+    // Clone Kernel Stack -> addr should be different form parent
     child->kernel_stack = (unsigned long)allocate(KERNEL_STACK_SIZE);
     memcpy((void*)child->kernel_stack, (void*)parent->kernel_stack, KERNEL_STACK_SIZE);
     
-    // Clone User Stack
+    // Clone User Stack -> addr should be different form parent
     child->user_stack = (unsigned long)allocate(USER_STACK_SIZE);
     memcpy((void*)child->user_stack, (void*)parent->user_stack, USER_STACK_SIZE);
     
     // Need to fix pointers in the child's context block pointing to absolute addresses!
+    // calculate the offset of kenel and user dtack between child and parent,
+    // then apply the offset to the trap frame pointer (s0) and sp in the child's kernel stack.
     unsigned long kstack_offset = child->kernel_stack - parent->kernel_stack;
     unsigned long ustack_offset = child->user_stack - parent->user_stack;
     
@@ -171,10 +194,10 @@ long sys_fork(struct pt_regs *parent_regs) {
     
     // We adjust ra and sp in the switch context block too
     child->context.sp = (unsigned long)child_regs;
+    // set to ret_from_exception so that the child pt_regs will be loaded and back to user mode
     child->context.ra = (unsigned long)ret_from_exception; // bypass returning to fork caller in supervisor
     
-    // advance parent pc here as they are returning exactly from the trap dispatcher
-    // child starts right after the ecall!
+    // since the child is not from do_trap() -> manually adjust the return address
     child_regs->epc += 4; 
     
     enqueue(&run_queue, child);
@@ -182,11 +205,15 @@ long sys_fork(struct pt_regs *parent_regs) {
     return child->pid;
 }
 
+/**
+ * @brief 5: Wait for the process identified by pid to finish.
+ * @return the pid of the finished process.
+ */
 long sys_waitpid(long pid) {
     thread *current = get_cur_thread();
     struct thread *node = run_queue;
     
-    // Is it existing?
+    // Search for the Target
     int found = 0;
     thread *target = NULL;
     do {
@@ -202,6 +229,7 @@ long sys_waitpid(long pid) {
         return -1;
     }
     
+    // the child is finished -> no need to wait
     if (target->status == THREAD_TERMINATED || target->status == THREAD_ABORTED) {
         return pid;
     }
@@ -211,14 +239,23 @@ long sys_waitpid(long pid) {
     current->waiting_pid = pid;
     schedule();
     
+    // the parent wake up when the child call thread_exit()
     return pid;
 }
 
+/**
+ * @brief 6: Terminate the current process.
+ */
 void sys_exit(int status) {
     thread_exit();
 }
 
+/**
+ * @brief 7: Terminate the process identified by pid.
+ * @return 0 on success, -1 on failure.
+ */
 int sys_stop(long pid) {
+    // find the target thread in run_queue
     struct thread *node = run_queue;
     thread *target = NULL;
     do {
@@ -230,11 +267,12 @@ int sys_stop(long pid) {
     } while (node != run_queue);
     
     if (target) {
+        // stop the target
         target->status = THREAD_ABORTED;
         
-        // Wake parent up if it was waiting for this process
+        // Wake up parent if it was waiting for this process
         if (target->parent != NULL && target->parent->status == THREAD_WAITING && 
-           (target->parent->waiting_pid == target->pid || target->parent->waiting_pid == -1)) {
+           (target->parent->waiting_pid == target->pid || target->parent->waiting_pid == -1)) { // -1 means waiting for any child
             target->parent->status = THREAD_READY;
             target->parent->waiting_pid = -1;
         }
@@ -248,6 +286,25 @@ int sys_stop(long pid) {
     return -1;
 }
 
+/**
+ * @brief 8: Display the video.
+ */
+void sys_display(unsigned int *bmp_image, unsigned int width, unsigned int height) {
+    video_bmp_display(bmp_image, width, height);
+}
+
+/**
+ * @brief 9: Sleep for a specified number of microseconds.
+ * @return 0 on success, -1 on failure.
+ */
+int sys_usleep(unsigned int usec) {
+    return thread_sleep(usec);
+}
+
+/**
+ * @brief 10: Register a user-space handler for the given signal. The handler must run in U-mode
+ * @return the previous handler for the signal
+ */
 long sys_signal(int signum, void (*handler)()) {
     if (signum < 0 || signum >= 32) return -1;
     thread *current = get_cur_thread();
@@ -255,6 +312,11 @@ long sys_signal(int signum, void (*handler)()) {
     return 0; // Return value is ignored per requirement
 }
 
+/**
+ * @brief 11: Restore the original user context after a signal handler returns. 
+ *            This syscall is called automatically via a trampoline set by the kernel. 
+ *            The kernel also recycles the signal stack upon completion.
+ */
 void sys_sigreturn(struct pt_regs *regs) {
     thread *current = get_cur_thread();
 
@@ -269,6 +331,12 @@ void sys_sigreturn(struct pt_regs *regs) {
     printf("[INFO SIGRETURN] Signal handler finished (PID: %d)\r\n", current->pid);
 }
 
+/**
+ * @brief 12: Send a signal to the process identified by pid. 
+ *            If the process has a registered handler for the signal, the handler is executed. 
+ *            Otherwise, the process is terminated by default.
+ * @return 0 on success, -1 on failure.
+ */
 int sys_kill(int pid, int signum) {
     if (signum < 0 || signum >= 32 || pid <= 0) return -1;
     

@@ -1,6 +1,6 @@
 .section .text
 .global switch_to
-.align 2
+.align 2    /* not needed but for cache performance and safe calling convention */
 switch_to:
     /* Save context into prev (a0) */
     sd ra,  0(a0)
@@ -36,4 +36,4 @@ switch_to:
 
     mv tp, a1
     
-    ret
+    ret  /* since we already change ra -> `ret` will let ra jump to the new thread */

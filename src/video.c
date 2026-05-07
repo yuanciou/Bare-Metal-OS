@@ -112,6 +112,15 @@ static int fw_cfg_find_file(const char* name) {
 
 #define CACHE_BLOCK_SIZE 64
 
+/**
+ * @brief Flush the cache for a given memory region.
+ *        move the parameter to a0 register
+ *        machine code for "cbo.flush %0" instruction
+ *
+ *        input operand: the address to flush, passed in a general-purpose register
+ *        clobber list: indicates that this assembly code may modify memory and the a0 register, preventing certain compiler optimizations
+ * @param start The starting address of the region to flush.
+ */
 #define cbo_flush(start)                \
     ({                                  \
         asm volatile("mv a0, %0\n\t"    \
@@ -121,13 +130,22 @@ static int fw_cfg_find_file(const char* name) {
                      : "memory", "a0"); \
     })
 
+/**
+ * @brief Flush the cache for a given memory region.
+ *        __sync_synchronize():
+ *            - compiler barrier: prevent the instr reordering across this point
+ *            - hardware barrier: ensure all memory operation before this point are completed.
+ */
 static void flush_dcache(void* addr, unsigned long len) {
 #ifdef ORANGE_PI
+    // Align down the start address according to the cache block size
     unsigned long start = (unsigned long)addr & ~(CACHE_BLOCK_SIZE - 1);
-    __sync_synchronize();
+    __sync_synchronize(); // check memcpy is completed
+    
+    // Flush the cache line by line (CACHE_BLOCK_SIZE)
     for (unsigned long line = start; line < (unsigned long)addr + len; line += CACHE_BLOCK_SIZE) {
         cbo_flush(line);
-        __sync_synchronize();
+        __sync_synchronize(); // ensure the flush is completed
     }
 #endif
 }
@@ -152,14 +170,25 @@ void video_init() {
     // Orange Pi needs no initialization as per TODO.md
 }
 
+/**
+ * @brief Display the BMP image on the screen by copying the image data to the framebuffer row by row.
+ *        call flush_dcache after copying each row to ensure the data is written to DRAM and visible to HDMI controller.
+ */
 void video_bmp_display(unsigned int* bmp_image, unsigned int width, unsigned int height) {
     unsigned int* fb = (unsigned int*)FB_BASE;
+    
+    // Center the image on the screen
     int start_x = (FB_WIDTH - (int)width) / 2;
     int start_y = (FB_HEIGHT - (int)height) / 2;
 
+    // Copy the BMP image to the framebuffer line by line, flushing the cache after each line
+    // since the image size may smaller than the FB size.
     for (int y = 0; y < (int)height; y++) {
         void* dst = fb + (start_y + y) * FB_WIDTH + start_x;
         memcpy(dst, bmp_image + y * width, width * sizeof(unsigned int));
+        
+        // Flush the cache since CPU may write the image only on its cache not DRAM
+        // But HDMI controller does not have the right to access CPU cache, it will directly read from (0x7f700000)
         flush_dcache(dst, width * sizeof(unsigned int));
     }
 }

@@ -12,6 +12,8 @@ long sys_fork(struct pt_regs *parent_regs);
 long sys_waitpid(long pid);
 void sys_exit(int status);
 int sys_stop(long pid);
+void sys_display(unsigned int *bmp_image, unsigned int width, unsigned int height);
+int sys_usleep(unsigned int usec);
 long sys_signal(int signum, void (*handler)());
 void sys_sigreturn(struct pt_regs *regs);
 int sys_kill(int pid, int signum);
