@@ -320,11 +320,13 @@ long sys_signal(int signum, void (*handler)()) {
 void sys_sigreturn(struct pt_regs *regs) {
     thread *current = get_cur_thread();
 
+    // free the signal stack since the handler is done and we have restored the original context
     if (current->signal_stack_page) {
         free((void*)current->signal_stack_page);
         current->signal_stack_page = 0;
     }
 
+    // restore the original context saved before jumping back
     *regs = current->signal_saved_regs;
     current->is_handling_signal = 0;
 
@@ -340,6 +342,7 @@ void sys_sigreturn(struct pt_regs *regs) {
 int sys_kill(int pid, int signum) {
     if (signum < 0 || signum >= 32 || pid <= 0) return -1;
     
+    // find target thread in run_queue
     struct thread *node = run_queue;
     thread *target = NULL;
     do {
@@ -353,6 +356,8 @@ int sys_kill(int pid, int signum) {
     if (!target) return -1;
 
     if (target->signal_handler[signum]) {
+        // the signal has a handler
+        // -> set the pending signal bit
         target->sigpending |= (1 << signum);
     } else {
         // Default behavior: terminate
@@ -414,7 +419,7 @@ void handle_syscall(struct pt_regs *regs) {
             break;
         case 11:
             sys_sigreturn(regs);
-            return; // Already restored context, skip epc += 4
+            return; // Already restored context during sigreturn, no need to adjust EPC or set return value
         case 12:
             ret = sys_kill((int)arg0, (int)arg1);
             break;

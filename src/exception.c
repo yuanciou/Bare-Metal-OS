@@ -17,10 +17,10 @@ extern char sigreturn_stub_end[];
 
 void check_signals(struct pt_regs *regs) {
     thread *current = get_cur_thread();
-    if (current && current->sigpending != 0 && current->is_handling_signal == 0) {
+    if (current && current->sigpending != 0 && current->is_handling_signal == 0) { // check need to handle signal and not handling other signal
         for (int i = 0; i < 32; i++) {
-            if (current->sigpending & (1 << i)) {
-                current->sigpending &= ~(1 << i);
+            if (current->sigpending & (1 << i)) { // find the first pending signal
+                current->sigpending &= ~(1 << i); // clear the pending bit
                 current->is_handling_signal = 1;
 
                 // Save current context
@@ -31,15 +31,15 @@ void check_signals(struct pt_regs *regs) {
                 
                 // Copy sigreturn trampoline to signal stack
                 unsigned long stub_size = (unsigned long)sigreturn_stub_end - (unsigned long)sigreturn_stub;
-                unsigned long trampoline = current->signal_stack_page + 4096 - stub_size;
+                unsigned long trampoline = current->signal_stack_page + 4096 - stub_size; // cal the stack top
                 memcpy((void*)trampoline, (void*)sigreturn_stub, stub_size);
 
                 // Flush I-cache for the trampoline
                 asm volatile("fence.i");
 
                 // Redirect to handler
-                regs->ra = trampoline;
-                regs->sp = trampoline;
+                regs->ra = trampoline; // set return addr to trampoline so that the sigreturn will execute when handler finish
+                regs->sp = trampoline; // the stack top for the signal handler to use
                 regs->epc = current->signal_handler[i];
                 
                 break;
