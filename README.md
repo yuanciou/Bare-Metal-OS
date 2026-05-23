@@ -49,13 +49,19 @@ make qemu
 │   ├── plic.c              // the PLIC part of 
 │   ├── plic.h
 │   ├── start.S
+│   ├── syscall.c           // the user space syscall implement
+│   ├── syscall.h
 │   ├── task.c              // handle the add_task() and run_task()
 │   ├── task.h
+│   ├── thread_switch.S     // handle the thread switch (callee save)
 │   ├── timer.c             // add_timer() and handle_timer_interrupt()
 │   ├── timer.h
+│   ├── trampoline.S        // the tramploline for POSIX signal
 │   ├── trap.S              // handle the assembly part in trap frame
 │   ├── uart.c              // the uart (async, polling, interrupt handler)
-│   └── uart.h
+│   ├── uart.h
+│   ├── video.c             // the video player 
+│   └── video.h
 ├── initramfs.cpio
 ├── main.c
 ├── Makefile
@@ -87,3 +93,7 @@ make qemu
   - concurrent I/O devices handling (add the interrupt to task)
     - nested interrupt
     - task preemption 
+- Thread and Process
+  - thread structure and scheduler (context switch)
+  - implement syscall (detail in `src/syscall.c`)
+  - implement video player
