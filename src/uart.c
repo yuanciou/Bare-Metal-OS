@@ -134,28 +134,59 @@ void uart_putc_polling(char c) {
 }
 
 char uart_getc() {
-    if (uart_async && irq_enabled()) { // check if async mode is enabled
+    if (uart_async) {
         char c;
-
-        // try to pop a character from the rx ring buffer
-        while (!ringbuf_pop(&rx_ring, &c)) {
-            // wait for interrupt if the buffer is empty
-            asm volatile("wfi");
+        // check the ring buffer first
+        if (ringbuf_pop(&rx_ring, &c)) {
+            return c == '\r' ? '\n' : c;
         }
-        return c == '\r' ? '\n' : c;
+        
+        // if the buffer is empty -> check if the interrupt enabled
+        if (irq_enabled()) {
+            while (!ringbuf_pop(&rx_ring, &c)) {
+                // if the interrupt is enabled -> wait for interrupt
+                asm volatile("wfi");
+            }
+            return c == '\r' ? '\n' : c;
+        } else {
+            // use polling when buffer is empty and the interrupt is disabled
+            return uart_getc_polling(); 
+        }
     } else {
         return uart_getc_polling();
     }
 }
 
 char uart_getc_raw() {
-    if (uart_async && irq_enabled()) { // check if async mode is enabled
+    if (uart_async) {
         char c;
-        while (!ringbuf_pop(&rx_ring, &c)) {
-            asm volatile("wfi");
+        if (ringbuf_pop(&rx_ring, &c)) return c; // check buffer first
+        
+        if (irq_enabled()) {
+            while (!ringbuf_pop(&rx_ring, &c)) {
+                asm volatile("wfi");
+            }
+            return c;
+        } else {
+            return uart_getc_raw_polling(); 
         }
-        return c;
     } else {
+        return uart_getc_raw_polling();
+    }
+}
+
+int uart_getc_nonblocking() {
+    if (uart_async) {
+        char c;
+        // get data from the ring buffer
+        if (ringbuf_pop(&rx_ring, &c)) {
+            return c == '\r' ? '\n' : c;
+        }
+        // if the buffer is empty
+        // -> return -1 to let the caller decide whether to wait or do something else
+        return -1; 
+    } else {
+        // not async -> polling
         return uart_getc_polling();
     }
 }
@@ -181,6 +212,42 @@ void uart_puts(const char* s) {
     while (*s)
         uart_putc(*s++);
 }
+
+
+// int uart_putc_nonblocking(char c) {
+//     if (uart_async) {
+//         // 🛡️ 進入臨界區段：關閉 CPU 中斷，保護 Ring Buffer 不被 ISR 打斷
+//         unsigned long sstatus;
+//         asm volatile("csrr %0, sstatus" : "=r"(sstatus));
+//         asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
+
+//         // 🚨 刪除那行危險的 *UART_IER &= ~(1 << 1);
+
+//         int success = ringbuf_push(&tx_ring, c);
+
+//         if (success) {
+//             // 只要有資料塞進 Buffer，就確保 UART 的發送中斷是開啟的
+//             *UART_IER |= (1 << 1);
+
+//             // Kickstart: 如果 UART 硬體目前是閒置的 (THR 為空)，手動餵它第一口
+//             // 一旦這口飯吃完，硬體就會乖乖觸發 THRE 中斷來要下一口
+//             if ((*UART_LSR & 0x20) != 0) { 
+//                 char next_c;
+//                 if (ringbuf_pop(&tx_ring, &next_c)) {
+//                     *UART_THR = next_c;
+//                 }
+//             }
+//         }
+
+//         // 🛡️ 離開臨界區段：恢復原本的 CPU 中斷狀態
+//         asm volatile("csrw sstatus, %0" : : "r"(sstatus));
+
+//         return success;
+//     } else {
+//         uart_putc_polling(c);
+//         return 1;
+//     }
+// }
 
 void uart_hex(unsigned long h) {
     uart_puts("0x");

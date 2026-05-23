@@ -25,7 +25,7 @@ all: qemu
 # 執行 `make qemu` 會做的事：清空 -> 編譯 -> 轉 bin -> 執行 qemu
 qemu: clean build_common
 	$(OBJCOPY) -O binary $(TARGET).elf $(TARGET).bin
-	$(QEMU) -M virt -m 256M -kernel $(TARGET).bin -initrd initramfs.cpio -display none -serial stdio
+	$(QEMU) -M virt -m 256M -kernel $(TARGET).bin -initrd initramfs.cpio -device ramfb -serial stdio
 
 # 執行 `make orangepi` 會做的事：清空 -> 編譯 -> 轉 bin -> 產生 fit 映像檔
 orangepi: clean build_common

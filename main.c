@@ -10,6 +10,8 @@
 #include "src/plic.h"
 #include "src/uart.h"
 #include "src/task.h"
+#include "src/thread.h"
+#include "src/video.h"
 
 struct timeout_args {
     char *message;
@@ -39,6 +41,52 @@ static int my_atoi(const char *str) {
     }
     return res;
 }
+
+unsigned long kernel_hartid;
+const void *kernel_fdt;
+
+static volatile int completed_foo = 0;
+
+void run_shell(unsigned long hartid, const void *fdt);
+
+void shell_thread(void) {
+    printf("\r\nStarting Shell (PID: %d)...\r\n", get_cur_thread()->pid);
+    run_shell(kernel_hartid, kernel_fdt);
+}
+
+void user_program_loader(void) {
+    thread *cur = get_cur_thread();
+    char *filename = NULL;
+    if (cur) filename = cur->arg;
+
+    unsigned long initrd_start = get_initrd_start(kernel_fdt);
+
+    if (!filename) {
+        printf("No program specified for exec wrapper\r\n");
+        return;
+    }
+
+    if (exec(filename, initrd_start) < 0) {
+        // If exec fails, free the filename (otherwise exec replaces the context and doesn't return)
+        free(filename);
+    }
+}
+
+// void foo(void) {
+//     for (int i = 0; i < 5; i++) {
+//         printf("Thread id: %d %d\r\n", get_cur_thread()->pid, i);
+//         for (int j = 0; j < 100000000; j++);
+//         schedule();
+//     }
+    
+//     // Count how many foo instances have finished
+//     completed_foo++;
+//     if (completed_foo == 3) {
+//         // Once the last foo test completes, start the shell thread
+//         thread_create(shell_thread);
+//     }
+// }
+
 
 void run_shell(unsigned long hartid, const void *fdt) {
     char buffer[256];
@@ -74,6 +122,8 @@ void run_shell(unsigned long hartid, const void *fdt) {
             printf("  cat [file] - print file content in initramfs.\r\n");
             printf("  exec [file] - execute user program in U-mode.\r\n");
             printf("  setTimeout SECONDS MESSAGE - set a timeout with a message.\r\n");
+            printf("  signal - register a signal handler.\r\n");
+            printf("  kill [pid] - send SIGTERM to a process.\r\n");
         } else if (strcmp(buffer, "hello") == 0) {
             printf("Hello world.\r\n");
         } else if (strcmp(buffer, "info") == 0) {
@@ -106,7 +156,27 @@ void run_shell(unsigned long hartid, const void *fdt) {
         } else if (buffer[0] == 'e' && buffer[1] == 'x' && buffer[2] == 'e' && buffer[3] == 'c') {
             if (buffer[4] == ' ') {
                 if (initrd_start) {
-                    exec(buffer + 5, initrd_start);
+                    // Copy program name to heap so each thread has its own copy
+                    // or the program name may be overwritten by the next shell command before exec uses it.
+                    char *prog = (char *)allocate((unsigned long)(strlen(buffer + 5) + 1));
+                    if (!prog) {
+                        printf("Failed to allocate memory for program name\r\n");
+                        continue;
+                    }
+                    strcpy(prog, buffer + 5);
+
+                    thread *t = thread_create(user_program_loader);
+                    if (!t) {
+                        free(prog);
+                        printf("Failed to create thread for program %s\r\n", prog);
+                        continue;
+                    }
+                    t->arg = prog;
+                    printf("Launched %s as PID: %d\r\n", prog, t->pid);
+                    // Non-blocking: shell continues immediately
+                    while (t->status != THREAD_TERMINATED && t->status != THREAD_ABORTED) {
+                        schedule(); // yield the CPU to the just-created thread
+                    }
                 } else {
                     printf("No initrd found\r\n");
                 }
@@ -153,6 +223,22 @@ void run_shell(unsigned long hartid, const void *fdt) {
             targs->executed_time = get_time_in_seconds();
             
             add_timer(timeout_callback, targs, sec);
+        } else if (strcmp(buffer, "signal") == 0) {
+            // This is just to test if the syscall works from kernel mode too, 
+            // or if the user shell calls it.
+            // Requirement says "Type signal in the shell".
+            extern long sys_signal(int signum, void (*handler)());
+            // We don't have a real U-mode handler here, but we can't easily 
+            // register one from S-mode that runs in U-mode unless we have a U-mode address.
+            printf("signal command is usually for user shell.\r\n");
+        } else if (strncmp(buffer, "kill ", 5) == 0) {
+            int target_pid = my_atoi(buffer + 5);
+            extern int sys_kill(int pid, int signum);
+            if (sys_kill(target_pid, 15) == 0) {
+                printf("Sent SIGTERM to PID %d\r\n", target_pid);
+            } else {
+                printf("Failed to send signal to PID %d\r\n", target_pid);
+            }
         } else {
             printf("Unknown command: ");
             printf(buffer);
@@ -175,10 +261,34 @@ void start_kernel(unsigned long hartid, const void *fdt) {
 
     // Timer Init (sstatus.SIE open Global Interrupts)
     timer_init(fdt);
+    
+    // Video Init
+    video_init();
+
     printf("Hello from Main Kernel! Initialization done.\r\n");
 
     // enable the UART interrupt when we check the above is inti and open
     uart_setup_interrupts();
 
-    run_shell(hartid, fdt);
+    kernel_hartid = hartid;
+    kernel_fdt = fdt;
+
+    // Initialize thread mechanism and start testing
+    init_thread_system(); // Creates idle thread as PID 0
+
+    // (Deferred Shell Thread Creation)
+    // We let the foo threads run first so shell doesn't block the CPU.
+    // The last foo thread will create the shell thread.
+
+    // To test User Mode, uncomment the thread_create below or let the custom shell launch fork_test using exec
+    // thread_create(fork_test_thread);
+
+    // // Create foo threads for testing interleaving (PIDs 1, 2, 3)
+    // for (int i = 0; i < 3; i++) {
+    //     thread_create(foo); 
+    // }
+    thread_create(shell_thread);
+
+    // printf("Starting idle thread (PID: 0)... Tests will run, then shell will start.\r\n");
+    idle();
 }

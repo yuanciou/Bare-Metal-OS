@@ -1,5 +1,6 @@
 #include "task.h"
 #include "allocator.h"
+#include "thread.h"
 #include "../lib/stdio.h"
 #include <stddef.h>
 
@@ -11,7 +12,6 @@ struct task_node {
 };
 
 static struct task_node *task_queue_head = NULL;
-static int current_task_priority = -1;
 
 /**
  * @brief Add task to the task queue by turn off the innterupt to avoid concurrent modification
@@ -53,6 +53,17 @@ void add_task(task_callback_t callback, void *arg, int priority) {
  * @brief Run task with the highest priority.
  */
 void run_tasks(void) {
+    thread *current = get_cur_thread();
+    // Fallback for cases where thread system might not be fully up or during early init
+    int *task_priority_ptr;
+    static int fallback_priority = -1;
+
+    if (current) {
+        task_priority_ptr = &current->current_task_priority;
+    } else {
+        task_priority_ptr = &fallback_priority;
+    }
+
     while (1) {
         // Disable interrupts to safely check the queue
         unsigned long saved_sstatus;
@@ -64,7 +75,7 @@ void run_tasks(void) {
             break;
         }
 
-        if (task_queue_head->priority <= current_task_priority) { // No higher priority task to run
+        if (task_queue_head->priority <= *task_priority_ptr) { // No higher priority task to run
             asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
             break;
         }
@@ -72,8 +83,8 @@ void run_tasks(void) {
         struct task_node *task = task_queue_head;
         task_queue_head = task->next;
 
-        int saved_priority = current_task_priority;
-        current_task_priority = task->priority;
+        int saved_priority = *task_priority_ptr;
+        *task_priority_ptr = task->priority;
 
         // Re-enable interrupts to allow preemption during task execution
         asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
@@ -85,7 +96,7 @@ void run_tasks(void) {
         // Disable interrupts to clean up
         asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
 
-        current_task_priority = saved_priority;
+        *task_priority_ptr = saved_priority;
         free(task);
 
         // Restore original state

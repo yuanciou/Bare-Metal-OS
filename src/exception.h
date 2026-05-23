@@ -41,5 +41,6 @@ struct pt_regs {
 
 void do_trap(struct pt_regs* regs);
 int exec(const char* filename, unsigned long initrd_start);
+void launch_user_program(const char* filename, unsigned long initrd_start);
 
 #endif

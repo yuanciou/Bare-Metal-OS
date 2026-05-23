@@ -8,6 +8,8 @@ void timer_init(const void *fdt);
 void handle_timer_interrupt(void);
 
 void add_timer(void (*callback)(void*), void* arg, int sec);
+void add_timer_ms(void (*callback)(void*), void* arg, int ms);
+int add_timer_ticks(void (*callback)(void*), void* arg, unsigned long ticks);
 unsigned long get_time_in_seconds(void);
 
 #endif // TIMER_H
