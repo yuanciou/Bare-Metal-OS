@@ -3,7 +3,7 @@ ENTRY(_start)
 SECTIONS
 {
     . = 0xffffffc000000000;
-    . += 0x80200000;
+    . += LOAD_ADDR;
     _start = .;
     .text : { *(.text.boot) *(.text) }
     . = ALIGN(0x1000);

@@ -19,14 +19,31 @@ clear_bss_done:
     // Set up a temporary stack for setup_vm
     la sp, _end
 
+    // Set stvec to a temporary identity-mapped handler in case of exceptions during setup_vm
+    la t0, 1f
+    csrw stvec, t0
+
+    // Save hartid and fdt to s-registers (callee-saved)
+    mv s0, a0
+    mv s1, a1
+
+    // Explicitly save to stack to address potential clobbering concerns
+    addi sp, sp, -16
+    sd s0, 0(sp)
+    sd s1, 8(sp)
+
     call setup_vm
 
-    // Jump to higher-half
+    ld s0, 0(sp)
+    ld s1, 8(sp)
+    addi sp, sp, 16
+
+    // setup_vm returns PAGE_OFFSET
     la t0, 1f
-    li t1, 0xffffffc000000000
-    add t0, t0, t1
+    add t0, t0, a0
     jr t0
 
+.align 2
 1:
     // Now we are in the higher half!
     la sp, _end
