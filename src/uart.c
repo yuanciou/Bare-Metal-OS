@@ -40,9 +40,9 @@ static int ringbuf_pop(ringbuf_t *ring, char *c) {
     return 0; // Empty
 }
 
-static int ringbuf_empty(ringbuf_t *ring) {
-    return ring->head == ring->tail;
-}
+// static int ringbuf_empty(ringbuf_t *ring) {
+//     return ring->head == ring->tail;
+// }
 
 // =============================================================================
 //                         Async UART Intterrupt Handling
