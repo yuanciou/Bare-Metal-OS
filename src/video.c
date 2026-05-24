@@ -105,7 +105,7 @@ static int fw_cfg_find_file(const char* name) {
 #endif
 
 #ifdef ORANGE_PI
-#define FB_BASE   0x7f700000
+#define FB_BASE   (0x7f700000UL + PAGE_OFFSET)
 #define FB_WIDTH  1920
 #define FB_HEIGHT 1080
 #define FB_BPP    4

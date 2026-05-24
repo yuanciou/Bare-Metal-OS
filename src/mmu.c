@@ -218,6 +218,11 @@ void mmu_init(void) {
     map_pages(kernel_pgd, 0x87000000UL + PAGE_OFFSET, 0x87000000UL, 0x800000, PROT_MMIO); // Map 8MB for FB
 #endif
 
+#ifdef ORANGE_PI
+    // Map framebuffer for Orange Pi
+    map_pages(kernel_pgd, 0x7f700000UL + PAGE_OFFSET, 0x7f700000UL, 0x1000000, PROT_MMIO); // Map 16MB for FB
+#endif
+
     // Switch to new page table
     unsigned long satp_val = MAKE_SATP((unsigned long)kernel_pgd - PAGE_OFFSET);
     asm volatile(
