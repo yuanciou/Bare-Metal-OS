@@ -4,6 +4,7 @@
 #include "allocator.h"
 #include "exception.h"
 #include "timer.h"
+#include "mmu.h"
 
 // ============================================
 //                    Utils
@@ -126,6 +127,18 @@ void schedule(void) {
 
     // if the candidate thread is not as same as the current -> switch to it
     if (prev != next) {
+        // Switch address space if necessary
+        unsigned long* next_pgd = next->pgd ? next->pgd : kernel_pgd;
+        unsigned long* prev_pgd = prev->pgd ? prev->pgd : kernel_pgd;
+
+        if (next_pgd != prev_pgd) {
+            unsigned long satp_val = MAKE_SATP((unsigned long)next_pgd - PAGE_OFFSET);
+            asm volatile(
+                "csrw satp, %0\n"
+                "sfence.vma zero, zero\n"
+                : : "r"(satp_val) : "memory"
+            );
+        }
         switch_to(prev, next);
     }
 
@@ -181,6 +194,9 @@ void kill_zombies(void) {
             }
             if (to_free->user_stack) {
                 free((void*)to_free->user_stack);
+            }
+            if (to_free->pgd && to_free->pgd != kernel_pgd) {
+                free_pgd(to_free->pgd);
             }
             free(to_free);
             
@@ -250,6 +266,7 @@ thread* thread_create(void (*threadfn)()) {
     t->current_task_priority = -1;
     t->arg = NULL;
     t->entry_func = threadfn;
+    t->pgd = kernel_pgd;
 
     // Initialize signal fields
     for (int i = 0; i < 32; i++) t->signal_handler[i] = 0;

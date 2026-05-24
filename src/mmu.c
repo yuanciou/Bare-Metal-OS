@@ -1,5 +1,6 @@
 #include "mmu.h"
 #include "config.h"
+#include "thread.h"
 #include "../lib/string.h"
 
 // We need a statically allocated page for the root page table (PGD)
@@ -57,7 +58,10 @@ void drop_identity_map(void) {
     asm volatile("sfence.vma zero, zero" ::: "memory");
 }
 
+unsigned long* kernel_pgd = NULL;
+
 extern void* allocate(unsigned long size);
+extern void free(void* ptr);
 
 static unsigned long* pagewalk(unsigned long* pgd, unsigned long va, int alloc) {
     unsigned long vpn2 = (va >> PGD_SHIFT) & VPN_MASK;
@@ -68,6 +72,7 @@ static unsigned long* pagewalk(unsigned long* pgd, unsigned long va, int alloc) 
     if (!(*pte & PTE_V)) {
         if (!alloc) return 0;
         unsigned long* new_pg = (unsigned long*)allocate(PAGE_SIZE);
+        if (!new_pg) return 0;
         memset(new_pg, 0, PAGE_SIZE);
         *pte = (((unsigned long)new_pg - PAGE_OFFSET) >> 12 << 10) | PTE_V;
     }
@@ -77,6 +82,7 @@ static unsigned long* pagewalk(unsigned long* pgd, unsigned long va, int alloc) 
     if (!(*pte & PTE_V)) {
         if (!alloc) return 0;
         unsigned long* new_pg = (unsigned long*)allocate(PAGE_SIZE);
+        if (!new_pg) return 0;
         memset(new_pg, 0, PAGE_SIZE);
         *pte = (((unsigned long)new_pg - PAGE_OFFSET) >> 12 << 10) | PTE_V;
     }
@@ -88,8 +94,82 @@ static unsigned long* pagewalk(unsigned long* pgd, unsigned long va, int alloc) 
 void map_pages(unsigned long* pgd, unsigned long va, unsigned long pa, unsigned long size, unsigned long prot) {
     for (unsigned long a = va; a < va + size; a += PAGE_SIZE, pa += PAGE_SIZE) {
         unsigned long* pte = pagewalk(pgd, a, 1);
-        *pte = (pa >> 12 << 10) | prot;
+        if (pte) *pte = (pa >> 12 << 10) | prot;
     }
+}
+
+void map_user_pages(unsigned long va, unsigned long size, unsigned long pa, unsigned long prot) {
+    thread* current = get_cur_thread();
+    if (current && current->pgd) {
+        map_pages(current->pgd, va, pa, size, prot | PTE_U);
+    }
+}
+
+unsigned long* copy_pgd(unsigned long* pgd) {
+    unsigned long* new_pgd = (unsigned long*)allocate(PAGE_SIZE);
+    if (!new_pgd) return NULL;
+    memset(new_pgd, 0, PAGE_SIZE);
+    
+    // Copy kernel mappings (upper half)
+    for (int i = 256; i < 512; i++) {
+        new_pgd[i] = pgd[i];
+    }
+
+    // Copy user mappings (lower half)
+    for (int i = 0; i < 256; i++) {
+        if (pgd[i] & PTE_V) {
+            unsigned long* parent_pmd = (unsigned long*)((((pgd[i] >> 10) << 12)) + PAGE_OFFSET);
+            unsigned long* child_pmd = (unsigned long*)allocate(PAGE_SIZE);
+            if (!child_pmd) { free_pgd(new_pgd); return NULL; }
+            memset(child_pmd, 0, PAGE_SIZE);
+            new_pgd[i] = (((unsigned long)child_pmd - PAGE_OFFSET) >> 12 << 10) | PTE_V;
+
+            for (int j = 0; j < 512; j++) {
+                if (parent_pmd[j] & PTE_V) {
+                    unsigned long* parent_pt = (unsigned long*)((((parent_pmd[j] >> 10) << 12)) + PAGE_OFFSET);
+                    unsigned long* child_pt = (unsigned long*)allocate(PAGE_SIZE);
+                    if (!child_pt) { free_pgd(new_pgd); return NULL; }
+                    memset(child_pt, 0, PAGE_SIZE);
+                    child_pmd[j] = (((unsigned long)child_pt - PAGE_OFFSET) >> 12 << 10) | PTE_V;
+
+                    for (int k = 0; k < 512; k++) {
+                        if (parent_pt[k] & PTE_V) {
+                            unsigned long parent_pa = (parent_pt[k] >> 10) << 12;
+                            unsigned long* child_page = (unsigned long*)allocate(PAGE_SIZE);
+                            if (!child_page) { free_pgd(new_pgd); return NULL; }
+                            // Copy data from parent physical page to child physical page
+                            memcpy(child_page, (void*)(parent_pa + PAGE_OFFSET), PAGE_SIZE);
+                            child_pt[k] = (((unsigned long)child_page - PAGE_OFFSET) >> 12 << 10) | (parent_pt[k] & 0x3FF);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return new_pgd;
+}
+
+void free_pgd(unsigned long* pgd) {
+    // Free user mappings (lower half)
+    for (int i = 0; i < 256; i++) {
+        if (pgd[i] & PTE_V) {
+            unsigned long* pmd = (unsigned long*)((((pgd[i] >> 10) << 12)) + PAGE_OFFSET);
+            for (int j = 0; j < 512; j++) {
+                if (pmd[j] & PTE_V) {
+                    unsigned long* pt = (unsigned long*)((((pmd[j] >> 10) << 12)) + PAGE_OFFSET);
+                    for (int k = 0; k < 512; k++) {
+                        if (pt[k] & PTE_V) {
+                            unsigned long pa = (pt[k] >> 10) << 12;
+                            free((void*)(pa + PAGE_OFFSET));
+                        }
+                    }
+                    free(pt);
+                }
+            }
+            free(pmd);
+        }
+    }
+    free(pgd);
 }
 
 extern char _text_end;
@@ -101,8 +181,8 @@ extern unsigned long G_MEMPOOL_START;
 extern unsigned long G_MEMPOOL_SIZE;
 
 void mmu_init(void) {
-    unsigned long* new_pgd = (unsigned long*)allocate(PAGE_SIZE);
-    memset(new_pgd, 0, PAGE_SIZE);
+    kernel_pgd = (unsigned long*)allocate(PAGE_SIZE);
+    memset(kernel_pgd, 0, PAGE_SIZE);
 
     // Identify kernel physical address
     // Since we are in virtual memory, 'la' gives virtual address.
@@ -113,36 +193,33 @@ void mmu_init(void) {
 
     // Map the RAM as R-W using values from the allocator (already virtualized)
     unsigned long ram_pa = G_MEMPOOL_START - PAGE_OFFSET;
-    map_pages(new_pgd, G_MEMPOOL_START, ram_pa, G_MEMPOOL_SIZE, PTE_V | PTE_R | PTE_W | PTE_A | PTE_D | PTE_G);
+    map_pages(kernel_pgd, G_MEMPOOL_START, ram_pa, G_MEMPOOL_SIZE, PTE_V | PTE_R | PTE_W | PTE_A | PTE_D | PTE_G);
 
     // Map the kernel sections with proper permissions (overwrites previous R-W mapping)
     unsigned long text_size = (unsigned long)&_text_end - (unsigned long)&_start;
-    map_pages(new_pgd, (unsigned long)&_start, kernel_pa, text_size, PTE_V | PTE_R | PTE_X | PTE_A | PTE_G);
+    map_pages(kernel_pgd, (unsigned long)&_start, kernel_pa, text_size, PTE_V | PTE_R | PTE_X | PTE_A | PTE_G);
 
     unsigned long rodata_size = (unsigned long)&_rodata_end - (unsigned long)&_text_end;
-    map_pages(new_pgd, (unsigned long)&_text_end, kernel_pa + text_size, rodata_size, PTE_V | PTE_R | PTE_A | PTE_G);
-
-    // No need to explicitly map .data and .bss since they fall under the general RAM R-W mapping,
-    // but if we want to be explicit:
-    // unsigned long data_bss_size = (unsigned long)&_end - (unsigned long)&_rodata_end;
-    // map_pages(new_pgd, (unsigned long)&_rodata_end, kernel_pa + text_size + rodata_size, data_bss_size, PTE_V | PTE_R | PTE_W | PTE_A | PTE_D | PTE_G);
+    map_pages(kernel_pgd, (unsigned long)&_text_end, kernel_pa + text_size, rodata_size, PTE_V | PTE_R | PTE_A | PTE_G);
 
     // Map MMIO regions
     if (uart_base_addr) {
-        map_pages(new_pgd, uart_base_addr, uart_base_addr - PAGE_OFFSET, PAGE_SIZE, PROT_MMIO);
+        map_pages(kernel_pgd, uart_base_addr, uart_base_addr - PAGE_OFFSET, PAGE_SIZE, PROT_MMIO);
     }
     if (plic_base) {
         // PLIC is usually larger than 1 page, map 4MB for safety
-        map_pages(new_pgd, plic_base, plic_base - PAGE_OFFSET, 0x400000, PROT_MMIO);
+        map_pages(kernel_pgd, plic_base, plic_base - PAGE_OFFSET, 0x400000, PROT_MMIO);
     }
 
 #ifdef QEMU
     // Map fw_cfg for video.c
-    map_pages(new_pgd, 0x10100000UL + PAGE_OFFSET, 0x10100000UL, PAGE_SIZE, PROT_MMIO);
+    map_pages(kernel_pgd, 0x10100000UL + PAGE_OFFSET, 0x10100000UL, PAGE_SIZE, PROT_MMIO);
+    // Map framebuffer (RAMFB)
+    map_pages(kernel_pgd, 0x87000000UL + PAGE_OFFSET, 0x87000000UL, 0x800000, PROT_MMIO); // Map 8MB for FB
 #endif
 
     // Switch to new page table
-    unsigned long satp_val = MAKE_SATP((unsigned long)new_pgd - PAGE_OFFSET);
+    unsigned long satp_val = MAKE_SATP((unsigned long)kernel_pgd - PAGE_OFFSET);
     asm volatile(
         "csrw satp, %0\n"
         "sfence.vma zero, zero\n"
@@ -151,3 +228,4 @@ void mmu_init(void) {
         : "memory"
     );
 }
+

@@ -8,6 +8,7 @@
 #include "plic.h"
 #include "task.h"
 #include "thread.h"
+#include "mmu.h"
 
 
 void handle_syscall(struct pt_regs *regs);
@@ -118,23 +119,62 @@ int exec(const char* filename, unsigned long initrd_start) {
         printf("Failed to find %s in initramfs\r\n", filename);
         return -1;
     }
-    // alloc a page for user stack
-    // + STACK_SIZE to point to the top of the stack (since the stack grows downwards)
-    unsigned long stack_size = USER_STACK_SIZE;
-    unsigned long user_stack_base = (unsigned long)allocate(stack_size);
-    unsigned long user_sp = user_stack_base + stack_size;
 
     thread* current = get_cur_thread();
-    if (current) {
-        current->user_stack = user_stack_base;
+    
+    // Allocate new PGD for the user process
+    unsigned long* new_pgd = (unsigned long*)allocate(PAGE_SIZE);
+    memset(new_pgd, 0, PAGE_SIZE);
+    
+    // Copy kernel mappings from global kernel_pgd
+    extern unsigned long* kernel_pgd;
+    for (int i = 256; i < 512; i++) {
+        new_pgd[i] = kernel_pgd[i];
     }
 
-    // set data (user program start) to sepc so that sret will jump to the user program
-    asm volatile("csrw sepc, %0" : : "r"((unsigned long)data));
+    // Map user code at virtual address 0x0
+    unsigned long code_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    for (unsigned long i = 0; i < code_pages; i++) {
+        void* phys_page = allocate(PAGE_SIZE);
+        memset(phys_page, 0, PAGE_SIZE);
+        unsigned long copy_size = (i == code_pages - 1) ? (size % PAGE_SIZE) : PAGE_SIZE;
+        if (copy_size == 0) copy_size = PAGE_SIZE;
+        memcpy(phys_page, data + i * PAGE_SIZE, copy_size);
+        
+        map_pages(new_pgd, i * PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE, 
+                  PTE_V | PTE_R | PTE_W | PTE_X | PTE_U | PTE_A | PTE_D);
+    }
+
+    // Map user stack at virtual address 0x003f_ffff_f000
+    unsigned long stack_top = 0x4000000000UL;
+    unsigned long stack_base = stack_top - USER_STACK_SIZE;
+    unsigned long stack_pages = USER_STACK_SIZE / PAGE_SIZE;
+    for (unsigned long i = 0; i < stack_pages; i++) {
+        void* phys_page = allocate(PAGE_SIZE);
+        memset(phys_page, 0, PAGE_SIZE);
+        map_pages(new_pgd, stack_base + i * PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE,
+                  PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D);
+    }
+
+    // Update thread struct
+    if (current) {
+        current->pgd = new_pgd;
+    }
+
+    // Switch to new page table immediately
+    unsigned long satp_val = MAKE_SATP((unsigned long)new_pgd - PAGE_OFFSET);
+    asm volatile(
+        "csrw satp, %0\n"
+        "sfence.vma zero, zero\n"
+        : : "r"(satp_val) : "memory"
+    );
+
+    // set sepc to 0 so that sret will jump to the start of the user program at VA 0x0
+    asm volatile("csrw sepc, %0" : : "r"(0UL));
 
     // save kernel sp to sscratch so that kernel could find its sp when trap happens
     asm volatile("csrw sscratch, sp");
-    asm volatile("mv sp, %0" : : "r"(user_sp)); // set sp to user stack
+    asm volatile("mv sp, %0" : : "r"(stack_top)); // set sp to user stack virtual address
 
     // Enable SPIE but clear SPP (U-mode)
     asm volatile(

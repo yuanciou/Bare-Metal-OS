@@ -74,9 +74,9 @@ static void fw_cfg_dma_transfer(void* address, uint32_t length, uint32_t control
     struct FWCfgDmaAccess access = {
         .control = bswap32(control),
         .length = bswap32(length),
-        .address = bswap64((uint64_t)address - PAGE_OFFSET),
+        .address = bswap64((uint64_t)address & ~PAGE_OFFSET),
     };
-    *FW_CFG_DMA = bswap64((uint64_t)&access - PAGE_OFFSET);
+    *FW_CFG_DMA = bswap64((uint64_t)&access & ~PAGE_OFFSET);
     while (bswap32(access.control) & ~FW_CFG_DMA_CTL_ERROR);
 }
 
@@ -154,7 +154,7 @@ static void flush_dcache(void* addr, unsigned long len) {
 void video_init() {
 #ifdef QEMU
     struct RAMFBCfg cfg = {
-        .addr = bswap64(FB_BASE),
+        .addr = bswap64(FB_BASE & ~PAGE_OFFSET),
         .fourcc = bswap32(XRGB8888),
         .flags = bswap32(0),
         .width = bswap32(FB_WIDTH),

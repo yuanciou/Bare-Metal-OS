@@ -7,6 +7,7 @@
 #include "uart.h"
 #include "../lib/string.h"
 #include "video.h"
+#include "mmu.h"
 
 // ======================================================================
 //                               Syscall
@@ -70,6 +71,11 @@ long sys_getpid(void) {
 long sys_uart_read(char *buf, long count) {
     long read_count = 0;
     
+    // Enable SUM to access user buffer
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus | (1UL << 18)));
+
     // enable interrupt to allow UART and timer interrupts during read
     asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
 
@@ -84,8 +90,9 @@ long sys_uart_read(char *buf, long count) {
         buf[read_count++] = (char)c;
     }
     
-    // disable interrupt after read and back to do_trap()
+    // disable interrupt and restore sstatus
     asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
     
     return read_count;
 }
@@ -96,9 +103,19 @@ long sys_uart_read(char *buf, long count) {
  */
 long sys_uart_write(const char *buf, long count) {
     long write_count = 0;
+    
+    // Enable SUM to access user buffer
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus | (1UL << 18)));
+
     while (write_count < count) {
         uart_putc(buf[write_count++]);
     }
+
+    // Restore sstatus
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+
     return write_count;
 }
 
@@ -110,12 +127,23 @@ int sys_exec(const char *path, struct pt_regs *regs) {
     const char *data = 0;
     int size = 0;
 
+    // Enable SUM to access path from user space
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus | (1UL << 18)));
+
     // set `data` to the start addr of the user program
     extern const void *kernel_fdt;
     extern unsigned long get_initrd_start(const void *fdt);
     
     unsigned long initrd_start = get_initrd_start(kernel_fdt);
+    if (initrd_start && initrd_start < PAGE_OFFSET) initrd_start += PAGE_OFFSET;
+
     int ret = initrd_get_file((const void *)initrd_start, path, &data, &size);
+
+    // Restore sstatus
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+
     if (ret != 0) {
         printf("Failed to find %s\r\n", path);
         return -1;
@@ -123,20 +151,70 @@ int sys_exec(const char *path, struct pt_regs *regs) {
     
     thread *current = get_cur_thread();
     
-    // Re-initialize user stack securely
-    // Instead of changing the sp on hardware directly, 
-    // we modify the `pt_regs` snapshot on kernel stack when interrupt occur
-    // since after interrupt (do_trap()), the sret will restore the context from `pt_regs` and jump to the new user program.
-    if (current->user_stack) {
-        regs->sp = current->user_stack + USER_STACK_SIZE; // reset stack
+    // Allocate new PGD for the user process
+    unsigned long* old_pgd = current->pgd;
+    unsigned long* new_pgd = (unsigned long*)allocate(PAGE_SIZE);
+    memset(new_pgd, 0, PAGE_SIZE);
+    
+    // Copy kernel mappings from global kernel_pgd
+    for (int i = 256; i < 512; i++) {
+        new_pgd[i] = kernel_pgd[i];
     }
+
+    // Map user code at virtual address 0x0
+    unsigned long code_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    for (unsigned long i = 0; i < code_pages; i++) {
+        void* phys_page = allocate(PAGE_SIZE);
+        if (!phys_page) {
+            if (new_pgd) free_pgd(new_pgd);
+            return -1;
+        }
+        memset(phys_page, 0, PAGE_SIZE);
+        unsigned long copy_size = (i == code_pages - 1) ? (size % PAGE_SIZE) : PAGE_SIZE;
+        if (copy_size == 0) copy_size = PAGE_SIZE;
+        memcpy(phys_page, data + i * PAGE_SIZE, copy_size);
+        
+        map_pages(new_pgd, i * PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE, 
+                  PTE_V | PTE_R | PTE_W | PTE_X | PTE_U | PTE_A | PTE_D);
+    }
+
+    // Map user stack at virtual address 0x003f_ffff_f000
+    // We'll map USER_STACK_SIZE bytes ending at 0x0040_0000_0000
+    unsigned long stack_top = 0x4000000000UL;
+    unsigned long stack_base = stack_top - USER_STACK_SIZE;
+    unsigned long stack_pages = USER_STACK_SIZE / PAGE_SIZE;
+    for (unsigned long i = 0; i < stack_pages; i++) {
+        void* phys_page = allocate(PAGE_SIZE);
+        if (!phys_page) {
+            if (new_pgd) free_pgd(new_pgd);
+            return -1;
+        }
+        memset(phys_page, 0, PAGE_SIZE);
+        map_pages(new_pgd, stack_base + i * PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE,
+                  PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D);
+    }
+
+    // Update thread struct
+    current->pgd = new_pgd;
     
-    // since the do_trap() will do epc += 4 to next instr,
-    // but we want to jump to the start od the new user program
-    // Offset by -4 to counteract the epc += 4 advancing behaviour of the trap dispatcher
-    regs->epc = (unsigned long)data - 4;
+    // Switch to new page table immediately
+    unsigned long satp_val = MAKE_SATP((unsigned long)new_pgd - PAGE_OFFSET);
+    asm volatile(
+        "csrw satp, %0\n"
+        "sfence.vma zero, zero\n"
+        : : "r"(satp_val) : "memory"
+    );
+
+    // Free old PGD and its user mappings if it was a private one
+    if (old_pgd && old_pgd != kernel_pgd) {
+        free_pgd(old_pgd);
+    }
+
+    // Initialize user registers in the trap frame
+    regs->epc = 0 - 4; // Will be 0 after handle_syscall does epc += 4
+    regs->sp = stack_top;
     
-    return 0; // Return value is irrelevant since we changed flow
+    return 0;
 }
 
 /**
@@ -149,56 +227,54 @@ long sys_fork(struct pt_regs *parent_regs) {
     thread* child = (thread*)allocate(sizeof(thread));
     if (!child) return -1;
     
-    // Exact clone of task structs layout
+    // Clone task struct
     memcpy(child, parent, sizeof(thread));
     
-    // Reset the childs pid and links
-    extern int nr_threads;
     child->pid = nr_threads++;
     child->status = THREAD_READY;
-    // set parent-child relationship
     child->parent = parent;
 
-    // Signal state reset for child (clone handlers, but clear pending/stack)
+    // Reset signal state for child
     child->sigpending = 0;
     child->is_handling_signal = 0;
     child->signal_stack_page = 0;
-    // handlers are already cloned by memcpy(child, parent, sizeof(thread))
     
-    // Clone Kernel Stack -> addr should be different form parent
+    // Clone Kernel Stack
     child->kernel_stack = (unsigned long)allocate(KERNEL_STACK_SIZE);
+    if (!child->kernel_stack) {
+        free(child);
+        return -1;
+    }
     memcpy((void*)child->kernel_stack, (void*)parent->kernel_stack, KERNEL_STACK_SIZE);
     
-    // Clone User Stack -> addr should be different form parent
-    child->user_stack = (unsigned long)allocate(USER_STACK_SIZE);
-    memcpy((void*)child->user_stack, (void*)parent->user_stack, USER_STACK_SIZE);
+    // Clone Address Space
+    if (parent->pgd && parent->pgd != kernel_pgd) {
+        child->pgd = copy_pgd(parent->pgd);
+        if (!child->pgd) {
+            free((void*)child->kernel_stack);
+            free(child);
+            return -1;
+        }
+    } else {
+        child->pgd = kernel_pgd;
+    }
     
-    // Need to fix pointers in the child's context block pointing to absolute addresses!
-    // calculate the offset of kenel and user dtack between child and parent,
-    // then apply the offset to the trap frame pointer (s0) and sp in the child's kernel stack.
+    // Calculate register offsets for kernel stack
     unsigned long kstack_offset = child->kernel_stack - parent->kernel_stack;
-    unsigned long ustack_offset = child->user_stack - parent->user_stack;
-    
-    // Get proper handle to the cloned child regs
     struct pt_regs *child_regs = (struct pt_regs *)((unsigned long)parent_regs + kstack_offset);
     
     // Child returns 0
     child_regs->a0 = 0;
-    
-    // tp needs to point to the new process 
+    // tp points to child thread struct
     child_regs->tp = (unsigned long)child;
     
-    // Update stack pointers inside trap frame
-    child_regs->sp += ustack_offset;
-    child_regs->s0 += ustack_offset; // frame pointer shifted to child's user stack boundaries
-    
-    // We adjust ra and sp in the switch context block too
+    // Child's sp and epc are already correct virtual addresses!
+    // We just need to ensure child starts at the right place.
+    child_regs->epc += 4; // Since parent's epc will be incremented in handle_syscall, we do it here for child.
+
+    // Setup switch context
     child->context.sp = (unsigned long)child_regs;
-    // set to ret_from_exception so that the child pt_regs will be loaded and back to user mode
-    child->context.ra = (unsigned long)ret_from_exception; // bypass returning to fork caller in supervisor
-    
-    // since the child is not from do_trap() -> manually adjust the return address
-    child_regs->epc += 4; 
+    child->context.ra = (unsigned long)ret_from_exception;
     
     enqueue(&run_queue, child);
     
@@ -290,7 +366,15 @@ int sys_stop(long pid) {
  * @brief 8: Display the video.
  */
 void sys_display(unsigned int *bmp_image, unsigned int width, unsigned int height) {
+    // Enable SUM (Supervisor User Memory) to access user memory in supervisor mode
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus | (1UL << 18))); // bit 18 is SUM
+
     video_bmp_display(bmp_image, width, height);
+
+    // Restore sstatus
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
 }
 
 /**

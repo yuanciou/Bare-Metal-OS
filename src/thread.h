@@ -32,6 +32,7 @@ typedef struct thread {
     int current_task_priority;  // for run_task() to determine the thread priority
     char* arg;                  // the argument to pass to the thread function
     void (*entry_func)();       // the entry function of the thread
+    unsigned long* pgd;         // page global directory (physical address stored in satp)
 
     // POSIX Signal fields
     unsigned long signal_handler[32];   // the signal handler 
