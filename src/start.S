@@ -48,6 +48,9 @@ clear_bss_done:
     // Now we are in the higher half!
     la sp, _end
 
+    // Drop identity mapping immediately after entering higher half
+    call drop_identity_map
+
     // Restore hartid and fdt
     mv a0, s0
     mv a1, s1

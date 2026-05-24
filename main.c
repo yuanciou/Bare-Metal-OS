@@ -274,9 +274,6 @@ void start_kernel(unsigned long hartid, const void *fdt) {
     int uart_irq = uart_get_irq(fdt);
     plic_enable_interrupt(uart_irq);
 
-    // Drop identity mapping now that we are fully in virtual memory
-    drop_identity_map();
-
     // Timer Init (sstatus.SIE open Global Interrupts)
     timer_init(fdt);
     
