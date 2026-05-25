@@ -89,6 +89,16 @@ void do_trap(struct pt_regs* regs) {
             int handled = 0;
             while (vma) {
                 if (badaddr >= vma->start && badaddr < vma->end) {
+                    // Check permissions
+                    int permission_ok = 1;
+                    if (cause == 12 && !(vma->prot & PROT_EXEC)) permission_ok = 0;
+                    if (cause == 13 && !(vma->prot & PROT_READ)) permission_ok = 0;
+                    if (cause == 15 && !(vma->prot & PROT_WRITE)) permission_ok = 0;
+
+                    if (!permission_ok) {
+                        break; // Fall through to unhandled -> segfault
+                    }
+
                     // Log the translation fault as required
                     printf("[Translation fault]: 0x%lx\r\n", badaddr);
 
@@ -185,6 +195,11 @@ int exec(const char* filename, unsigned long initrd_start) {
         new_pgd[i] = kernel_pgd[i];
     }
 
+    // Update thread struct
+    if (current) {
+        current->pgd = new_pgd;
+    }
+
     // Map user code at virtual address 0x0
     unsigned long code_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     extern vm_area* add_vma(thread *t, unsigned long start, unsigned long length, unsigned long prot, unsigned long flags);
@@ -193,33 +208,13 @@ int exec(const char* filename, unsigned long initrd_start) {
         code_vma->file_data = data;
         code_vma->file_size = (unsigned long)size;
     }
-    for (unsigned long i = 0; i < code_pages; i++) {
-        void* phys_page = allocate(PAGE_SIZE);
-        memset(phys_page, 0, PAGE_SIZE);
-        unsigned long copy_size = (i == code_pages - 1) ? (size % PAGE_SIZE) : PAGE_SIZE;
-        if (copy_size == 0) copy_size = PAGE_SIZE;
-        memcpy(phys_page, data + i * PAGE_SIZE, copy_size);
-        
-        map_pages(i * PAGE_SIZE, PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, 
-                  PTE_V | PTE_R | PTE_W | PTE_X | PTE_U | PTE_A | PTE_D);
-    }
+    // Pre-mapping removed for Demand Paging (Advanced Exercise 2)
 
     // Map user stack at virtual address 0x003f_ffff_f000
     unsigned long stack_top = 0x4000000000UL;
     unsigned long stack_base = stack_top - USER_STACK_SIZE;
     add_vma(current, stack_base, USER_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS);
-    unsigned long stack_pages = USER_STACK_SIZE / PAGE_SIZE;
-    for (unsigned long i = 0; i < stack_pages; i++) {
-        void* phys_page = allocate(PAGE_SIZE);
-        memset(phys_page, 0, PAGE_SIZE);
-        map_pages(stack_base + i * PAGE_SIZE, PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET,
-                  PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D);
-    }
-
-    // Update thread struct
-    if (current) {
-        current->pgd = new_pgd;
-    }
+    // Pre-mapping removed for Demand Paging (Advanced Exercise 2)
 
     // Switch to new page table immediately
     unsigned long satp_val = MAKE_SATP((unsigned long)new_pgd - PAGE_OFFSET);

@@ -236,6 +236,9 @@ int sys_exec(const char *path, struct pt_regs *regs) {
         new_pgd[i] = kernel_pgd[i];
     }
 
+    // Update thread struct
+    current->pgd = new_pgd;
+
     // Map user code at virtual address 0x0
     unsigned long code_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     vm_area *code_vma = add_vma(current, 0, code_pages * PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS);
@@ -243,40 +246,13 @@ int sys_exec(const char *path, struct pt_regs *regs) {
         code_vma->file_data = data;
         code_vma->file_size = size;
     }
-    for (unsigned long i = 0; i < code_pages; i++) {
-        void* phys_page = allocate(PAGE_SIZE);
-        if (!phys_page) {
-            if (new_pgd) free_pgd(new_pgd);
-            return -1;
-        }
-        memset(phys_page, 0, PAGE_SIZE);
-        unsigned long copy_size = (i == code_pages - 1) ? (size % PAGE_SIZE) : PAGE_SIZE;
-        if (copy_size == 0) copy_size = PAGE_SIZE;
-        memcpy(phys_page, data + i * PAGE_SIZE, copy_size);
-        
-        map_pages(i * PAGE_SIZE, PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, 
-                  PTE_V | PTE_R | PTE_W | PTE_X | PTE_U | PTE_A | PTE_D);
-    }
+    // Pre-mapping removed for Demand Paging (Advanced Exercise 2)
 
     // Map user stack at virtual address 0x003f_ffff_f000
-    // We'll map USER_STACK_SIZE bytes ending at 0x0040_0000_0000
     unsigned long stack_top = 0x4000000000UL;
     unsigned long stack_base = stack_top - USER_STACK_SIZE;
     add_vma(current, stack_base, USER_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS);
-    unsigned long stack_pages = USER_STACK_SIZE / PAGE_SIZE;
-    for (unsigned long i = 0; i < stack_pages; i++) {
-        void* phys_page = allocate(PAGE_SIZE);
-        if (!phys_page) {
-            if (new_pgd) free_pgd(new_pgd);
-            return -1;
-        }
-        memset(phys_page, 0, PAGE_SIZE);
-        map_pages(stack_base + i * PAGE_SIZE, PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET,
-                  PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D);
-    }
-
-    // Update thread struct
-    current->pgd = new_pgd;
+    // Pre-mapping removed for Demand Paging (Advanced Exercise 2)
     
     // Switch to new page table immediately
     unsigned long satp_val = MAKE_SATP((unsigned long)new_pgd - PAGE_OFFSET);
