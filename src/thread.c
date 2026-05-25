@@ -45,7 +45,9 @@ thread* get_cur_thread(void) {
  */
 static void thread_wakeup_callback(void* arg) {
     thread* t = (thread*)arg;
-    t->status = THREAD_READY;
+    if (t->status == THREAD_WAITING) {
+        t->status = THREAD_READY;
+    }
 }
 
 /**

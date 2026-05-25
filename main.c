@@ -112,6 +112,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
                 buffer[idx++] = c;
                 uart_putc(c);
             }
+            schedule(); // yield to allow other threads (like background timers) to run
         }
 
         if (idx == 0) continue;
@@ -176,9 +177,9 @@ void run_shell(unsigned long hartid, const void *fdt) {
                     }
                     t->arg = prog;
                     printf("Launched %s as PID: %d\r\n", prog, t->pid);
-                    // Non-blocking: shell continues immediately
+                    // Blocking by default for stability, unless we implement a more complex shell
                     while (t->status != THREAD_TERMINATED && t->status != THREAD_ABORTED) {
-                        schedule(); // yield the CPU to the just-created thread
+                        schedule();
                     }
                 } else {
                     printf("No initrd found\r\n");

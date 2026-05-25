@@ -415,18 +415,25 @@ void sys_exit(int status) {
  * @return 0 on success, -1 on failure.
  */
 int sys_stop(long pid) {
-    // find the target thread in run_queue
+    if (pid <= 0) return -1; // Protect PID 0 (idle) and invalid PIDs
+
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    asm volatile("csrc sstatus, %0" : : "r"(1 << 1)); // Disable interrupts
+
     struct thread *node = run_queue;
     thread *target = NULL;
-    do {
-        if (node->pid == pid) {
-            target = node;
-            break;
-        }
-        node = node->next;
-    } while (node != run_queue);
+    if (node) {
+        do {
+            if (node->pid == pid) {
+                target = node;
+                break;
+            }
+            node = node->next;
+        } while (node != run_queue);
+    }
     
-    if (target) {
+    if (target && target->status != THREAD_TERMINATED && target->status != THREAD_ABORTED) {
         // stop the target
         target->status = THREAD_ABORTED;
         
@@ -439,10 +446,14 @@ int sys_stop(long pid) {
         
         // If stopping self, must yield
         if (target == get_cur_thread()) {
+            asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
             schedule();
+            return 0; // Won't be reached
         }
+        asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
         return 0;
     }
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
     return -1;
 }
 
@@ -510,23 +521,33 @@ void sys_sigreturn(struct pt_regs *regs) {
 int sys_kill(int pid, int signum) {
     if (signum < 0 || signum >= 32 || pid <= 0) return -1;
     
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    asm volatile("csrc sstatus, %0" : : "r"(1 << 1)); // Disable interrupts
+
     // find target thread in run_queue
     struct thread *node = run_queue;
     thread *target = NULL;
-    do {
-        if (node->pid == pid) {
-            target = node;
-            break;
-        }
-        node = node->next;
-    } while (node != run_queue);
+    if (node) {
+        do {
+            if (node->pid == pid) {
+                target = node;
+                break;
+            }
+            node = node->next;
+        } while (node != run_queue);
+    }
 
-    if (!target) return -1;
+    if (!target || target->status == THREAD_TERMINATED || target->status == THREAD_ABORTED) {
+        asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+        return -1;
+    }
 
     if (target->signal_handler[signum]) {
         // the signal has a handler
         // -> set the pending signal bit
         target->sigpending |= (1 << signum);
+        asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
     } else {
         // Default behavior: terminate
         target->status = THREAD_ABORTED;
@@ -537,6 +558,13 @@ int sys_kill(int pid, int signum) {
             target->parent->status = THREAD_READY;
             target->parent->waiting_pid = -1;
         }
+
+        if (target == get_cur_thread()) {
+            asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+            schedule();
+            return 0; // Won't be reached
+        }
+        asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
     }
     return 0;
 }
