@@ -32,7 +32,8 @@
 unsigned long setup_vm(void);
 void mmu_init(void);
 void drop_identity_map(void);
-void map_pages(unsigned long* pgd, unsigned long va, unsigned long pa, unsigned long size, unsigned long prot);
+void map_pages_at(unsigned long* pgd, unsigned long va, unsigned long pa, unsigned long size, unsigned long prot);
+void map_pages(unsigned long va, unsigned long size, unsigned long pa, unsigned long prot);
 void map_user_pages(unsigned long va, unsigned long size, unsigned long pa, unsigned long prot);
 unsigned long* copy_pgd(unsigned long* pgd);
 void free_pgd(unsigned long* pgd);

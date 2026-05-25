@@ -23,12 +23,14 @@ static int is_vma_overlap(thread *t, unsigned long start, unsigned long end) {
     return 0;
 }
 
-void add_vma(thread *t, unsigned long start, unsigned long length, unsigned long prot, unsigned long flags) {
+vm_area* add_vma(thread *t, unsigned long start, unsigned long length, unsigned long prot, unsigned long flags) {
     vm_area *new_vma = (vm_area *)allocate(sizeof(vm_area));
     new_vma->start = start;
     new_vma->end = start + length;
     new_vma->prot = prot;
     new_vma->flags = flags;
+    new_vma->file_data = NULL;
+    new_vma->file_size = 0;
     new_vma->next = NULL;
 
     // Insert sorted by start address
@@ -43,6 +45,7 @@ void add_vma(thread *t, unsigned long start, unsigned long length, unsigned long
         new_vma->next = curr->next;
         curr->next = new_vma;
     }
+    return new_vma;
 }
 
 static unsigned long find_free_vma_region(thread *t, unsigned long length) {
@@ -235,6 +238,11 @@ int sys_exec(const char *path, struct pt_regs *regs) {
 
     // Map user code at virtual address 0x0
     unsigned long code_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    vm_area *code_vma = add_vma(current, 0, code_pages * PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS);
+    if (code_vma) {
+        code_vma->file_data = data;
+        code_vma->file_size = size;
+    }
     for (unsigned long i = 0; i < code_pages; i++) {
         void* phys_page = allocate(PAGE_SIZE);
         if (!phys_page) {
@@ -246,15 +254,15 @@ int sys_exec(const char *path, struct pt_regs *regs) {
         if (copy_size == 0) copy_size = PAGE_SIZE;
         memcpy(phys_page, data + i * PAGE_SIZE, copy_size);
         
-        map_pages(new_pgd, i * PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE, 
+        map_pages(i * PAGE_SIZE, PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, 
                   PTE_V | PTE_R | PTE_W | PTE_X | PTE_U | PTE_A | PTE_D);
     }
-    add_vma(current, 0, code_pages * PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS);
 
     // Map user stack at virtual address 0x003f_ffff_f000
     // We'll map USER_STACK_SIZE bytes ending at 0x0040_0000_0000
     unsigned long stack_top = 0x4000000000UL;
     unsigned long stack_base = stack_top - USER_STACK_SIZE;
+    add_vma(current, stack_base, USER_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS);
     unsigned long stack_pages = USER_STACK_SIZE / PAGE_SIZE;
     for (unsigned long i = 0; i < stack_pages; i++) {
         void* phys_page = allocate(PAGE_SIZE);
@@ -263,10 +271,9 @@ int sys_exec(const char *path, struct pt_regs *regs) {
             return -1;
         }
         memset(phys_page, 0, PAGE_SIZE);
-        map_pages(new_pgd, stack_base + i * PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE,
+        map_pages(stack_base + i * PAGE_SIZE, PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET,
                   PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D);
     }
-    add_vma(current, stack_base, USER_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS);
 
     // Update thread struct
     current->pgd = new_pgd;
@@ -571,7 +578,7 @@ void *sys_mmap(void *addr, unsigned long length, int prot, int flags) {
             void *phys_page = allocate(PAGE_SIZE);
             if (!phys_page) return (void *)-1;
             memset(phys_page, 0, PAGE_SIZE);
-            map_pages(current->pgd, a, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE, pte_prot);
+            map_pages_at(current->pgd, a, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE, pte_prot);
         }
     }
 

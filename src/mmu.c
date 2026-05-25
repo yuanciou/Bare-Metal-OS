@@ -91,18 +91,22 @@ static unsigned long* pagewalk(unsigned long* pgd, unsigned long va, int alloc) 
     return &pt[vpn0];
 }
 
-void map_pages(unsigned long* pgd, unsigned long va, unsigned long pa, unsigned long size, unsigned long prot) {
+void map_pages_at(unsigned long* pgd, unsigned long va, unsigned long pa, unsigned long size, unsigned long prot) {
     for (unsigned long a = va; a < va + size; a += PAGE_SIZE, pa += PAGE_SIZE) {
         unsigned long* pte = pagewalk(pgd, a, 1);
         if (pte) *pte = (pa >> 12 << 10) | prot;
     }
 }
 
-void map_user_pages(unsigned long va, unsigned long size, unsigned long pa, unsigned long prot) {
+void map_pages(unsigned long va, unsigned long size, unsigned long pa, unsigned long prot) {
     thread* current = get_cur_thread();
     if (current && current->pgd) {
-        map_pages(current->pgd, va, pa, size, prot | PTE_U);
+        map_pages_at(current->pgd, va, pa, size, prot | PTE_U);
     }
+}
+
+void map_user_pages(unsigned long va, unsigned long size, unsigned long pa, unsigned long prot) {
+    map_pages(va, size, pa, prot);
 }
 
 unsigned long* copy_pgd(unsigned long* pgd) {
@@ -193,34 +197,34 @@ void mmu_init(void) {
 
     // Map the RAM as R-W using values from the allocator (already virtualized)
     unsigned long ram_pa = G_MEMPOOL_START - PAGE_OFFSET;
-    map_pages(kernel_pgd, G_MEMPOOL_START, ram_pa, G_MEMPOOL_SIZE, PTE_V | PTE_R | PTE_W | PTE_A | PTE_D | PTE_G);
+    map_pages_at(kernel_pgd, G_MEMPOOL_START, ram_pa, G_MEMPOOL_SIZE, PTE_V | PTE_R | PTE_W | PTE_A | PTE_D | PTE_G);
 
     // Map the kernel sections with proper permissions (overwrites previous R-W mapping)
     unsigned long text_size = (unsigned long)&_text_end - (unsigned long)&_start;
-    map_pages(kernel_pgd, (unsigned long)&_start, kernel_pa, text_size, PTE_V | PTE_R | PTE_X | PTE_A | PTE_G);
+    map_pages_at(kernel_pgd, (unsigned long)&_start, kernel_pa, text_size, PTE_V | PTE_R | PTE_X | PTE_A | PTE_G);
 
     unsigned long rodata_size = (unsigned long)&_rodata_end - (unsigned long)&_text_end;
-    map_pages(kernel_pgd, (unsigned long)&_text_end, kernel_pa + text_size, rodata_size, PTE_V | PTE_R | PTE_A | PTE_G);
+    map_pages_at(kernel_pgd, (unsigned long)&_text_end, kernel_pa + text_size, rodata_size, PTE_V | PTE_R | PTE_A | PTE_G);
 
     // Map MMIO regions
     if (uart_base_addr) {
-        map_pages(kernel_pgd, uart_base_addr, uart_base_addr - PAGE_OFFSET, PAGE_SIZE, PROT_MMIO);
+        map_pages_at(kernel_pgd, uart_base_addr, uart_base_addr - PAGE_OFFSET, PAGE_SIZE, PROT_MMIO);
     }
     if (plic_base) {
         // PLIC is usually larger than 1 page, map 4MB for safety
-        map_pages(kernel_pgd, plic_base, plic_base - PAGE_OFFSET, 0x400000, PROT_MMIO);
+        map_pages_at(kernel_pgd, plic_base, plic_base - PAGE_OFFSET, 0x400000, PROT_MMIO);
     }
 
 #ifdef QEMU
     // Map fw_cfg for video.c
-    map_pages(kernel_pgd, 0x10100000UL + PAGE_OFFSET, 0x10100000UL, PAGE_SIZE, PROT_MMIO);
+    map_pages_at(kernel_pgd, 0x10100000UL + PAGE_OFFSET, 0x10100000UL, PAGE_SIZE, PROT_MMIO);
     // Map framebuffer (RAMFB)
-    map_pages(kernel_pgd, 0x87000000UL + PAGE_OFFSET, 0x87000000UL, 0x800000, PROT_MMIO); // Map 8MB for FB
+    map_pages_at(kernel_pgd, 0x87000000UL + PAGE_OFFSET, 0x87000000UL, 0x800000, PROT_MMIO); // Map 8MB for FB
 #endif
 
 #ifdef ORANGE_PI
     // Map framebuffer for Orange Pi
-    map_pages(kernel_pgd, 0x7f700000UL + PAGE_OFFSET, 0x7f700000UL, 0x1000000, PROT_MMIO); // Map 16MB for FB
+    map_pages_at(kernel_pgd, 0x7f700000UL + PAGE_OFFSET, 0x7f700000UL, 0x1000000, PROT_MMIO); // Map 16MB for FB
 #endif
 
     // Switch to new page table

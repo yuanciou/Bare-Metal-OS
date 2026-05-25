@@ -29,6 +29,8 @@ typedef struct vm_area {
     unsigned long end;
     unsigned long prot;
     unsigned long flags;
+    const char *file_data;
+    unsigned long file_size;
     struct vm_area *next;
 } vm_area;
 
