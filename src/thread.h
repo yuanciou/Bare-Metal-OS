@@ -6,6 +6,16 @@
 #define KERNEL_STACK_SIZE 0x2000
 #define USER_STACK_SIZE 0x2000
 
+/* mmap protections */
+#define PROT_NONE  0x0
+#define PROT_READ  0x1
+#define PROT_WRITE 0x2
+#define PROT_EXEC  0x4
+
+/* mmap flags */
+#define MAP_ANONYMOUS 0x20
+#define MAP_POPULATE  0x8000
+
 enum THREAD_STATUS {
     THREAD_RUNNING,     // currently running
     THREAD_READY,       // ready to run in the run queue
@@ -13,6 +23,14 @@ enum THREAD_STATUS {
     THREAD_TERMINATED,  // [Zombie] the thread has finished execution (or call exit()) but not yet cleaned up. Not in the run queue.
     THREAD_ABORTED,     // [Zombie] error or killed by signal. Not in the run queue.
 };
+
+typedef struct vm_area {
+    unsigned long start;
+    unsigned long end;
+    unsigned long prot;
+    unsigned long flags;
+    struct vm_area *next;
+} vm_area;
 
 typedef struct thread {
     struct thread_context {
@@ -33,6 +51,8 @@ typedef struct thread {
     char* arg;                  // the argument to pass to the thread function
     void (*entry_func)();       // the entry function of the thread
     unsigned long* pgd;         // page global directory (physical address stored in satp)
+
+    vm_area *vmas;              // virtual memory areas
 
     // POSIX Signal fields
     unsigned long signal_handler[32];   // the signal handler 

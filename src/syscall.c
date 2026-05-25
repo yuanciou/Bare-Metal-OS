@@ -10,6 +10,69 @@
 #include "mmu.h"
 
 // ======================================================================
+//                               Syscall Helpers
+// ----------------------------------------------------------------------
+static int is_vma_overlap(thread *t, unsigned long start, unsigned long end) {
+    vm_area *curr = t->vmas;
+    while (curr) {
+        if (!(end <= curr->start || start >= curr->end)) {
+            return 1;
+        }
+        curr = curr->next;
+    }
+    return 0;
+}
+
+void add_vma(thread *t, unsigned long start, unsigned long length, unsigned long prot, unsigned long flags) {
+    vm_area *new_vma = (vm_area *)allocate(sizeof(vm_area));
+    new_vma->start = start;
+    new_vma->end = start + length;
+    new_vma->prot = prot;
+    new_vma->flags = flags;
+    new_vma->next = NULL;
+
+    // Insert sorted by start address
+    if (!t->vmas || start < t->vmas->start) {
+        new_vma->next = t->vmas;
+        t->vmas = new_vma;
+    } else {
+        vm_area *curr = t->vmas;
+        while (curr->next && curr->next->start < start) {
+            curr = curr->next;
+        }
+        new_vma->next = curr->next;
+        curr->next = new_vma;
+    }
+}
+
+static unsigned long find_free_vma_region(thread *t, unsigned long length) {
+    unsigned long addr = 0x10000000; // Start searching from 256MB
+    while (1) {
+        int overlap = 0;
+        vm_area *curr = t->vmas;
+        while (curr) {
+            if (!(addr + length <= curr->start || addr >= curr->end)) {
+                addr = curr->end;
+                overlap = 1;
+                break;
+            }
+            curr = curr->next;
+        }
+        if (!overlap) break;
+    }
+    return addr;
+}
+
+static vm_area* copy_vma_list(vm_area* vmas) {
+    if (!vmas) return NULL;
+    vm_area* head = (vm_area*)allocate(sizeof(vm_area));
+    if (!head) return NULL;
+    memcpy(head, vmas, sizeof(vm_area));
+    head->next = copy_vma_list(vmas->next);
+    return head;
+}
+
+// ======================================================================
 //                               Syscall
 // ----------------------------------------------------------------------
 /*
@@ -151,6 +214,15 @@ int sys_exec(const char *path, struct pt_regs *regs) {
     
     thread *current = get_cur_thread();
     
+    // Clear old VMAs
+    vm_area *vma = current->vmas;
+    while (vma) {
+        vm_area *next = vma->next;
+        free(vma);
+        vma = next;
+    }
+    current->vmas = NULL;
+
     // Allocate new PGD for the user process
     unsigned long* old_pgd = current->pgd;
     unsigned long* new_pgd = (unsigned long*)allocate(PAGE_SIZE);
@@ -177,6 +249,7 @@ int sys_exec(const char *path, struct pt_regs *regs) {
         map_pages(new_pgd, i * PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE, 
                   PTE_V | PTE_R | PTE_W | PTE_X | PTE_U | PTE_A | PTE_D);
     }
+    add_vma(current, 0, code_pages * PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS);
 
     // Map user stack at virtual address 0x003f_ffff_f000
     // We'll map USER_STACK_SIZE bytes ending at 0x0040_0000_0000
@@ -193,6 +266,7 @@ int sys_exec(const char *path, struct pt_regs *regs) {
         map_pages(new_pgd, stack_base + i * PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE,
                   PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D);
     }
+    add_vma(current, stack_base, USER_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS);
 
     // Update thread struct
     current->pgd = new_pgd;
@@ -259,6 +333,9 @@ long sys_fork(struct pt_regs *parent_regs) {
         child->pgd = kernel_pgd;
     }
     
+    // Clone VMAs
+    child->vmas = copy_vma_list(parent->vmas);
+
     // Calculate register offsets for kernel stack
     unsigned long kstack_offset = child->kernel_stack - parent->kernel_stack;
     struct pt_regs *child_regs = (struct pt_regs *)((unsigned long)parent_regs + kstack_offset);
@@ -457,15 +534,59 @@ int sys_kill(int pid, int signum) {
     return 0;
 }
 
+/**
+ * @brief 13: Create memory regions for a user process.
+ * @return the starting address of the mapping on success, -1 on failure.
+ */
+void *sys_mmap(void *addr, unsigned long length, int prot, int flags) {
+    thread *current = get_cur_thread();
+
+    // 1. Round up length to page size
+    length = (length + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (length == 0) return (void *)-1;
+
+    unsigned long start = (unsigned long)addr;
+
+    // 2. Handle addr hint
+    // If it is NULL, or not page-aligned, or overlaps with existing ones, the kernel chooses.
+    if (start == 0 || (start & (PAGE_SIZE - 1)) != 0 || is_vma_overlap(current, start, start + length)) {
+        start = find_free_vma_region(current, length);
+    }
+
+    // 3. Add VMA
+    add_vma(current, start, length, (unsigned long)prot, (unsigned long)flags);
+    printf("[MMAP] PID: %d, start: 0x%lx, length: 0x%lx, prot: 0x%x, flags: 0x%x\r\n", 
+           current->pid, start, length, prot, flags);
+
+    // 4. Handle MAP_POPULATE
+    // If user specifies MAP_POPULATE, kernel should map physical pages immediately.
+    // For anonymous pages: allocate and map.
+    if (flags & MAP_POPULATE) {
+        unsigned long pte_prot = PTE_V | PTE_U | PTE_A | PTE_D;
+        if (prot & PROT_READ) pte_prot |= PTE_R;
+        if (prot & PROT_WRITE) pte_prot |= (PTE_W | PTE_R); // R=1 if W=1
+        if (prot & PROT_EXEC) pte_prot |= PTE_X;
+
+        for (unsigned long a = start; a < start + length; a += PAGE_SIZE) {
+            void *phys_page = allocate(PAGE_SIZE);
+            if (!phys_page) return (void *)-1;
+            memset(phys_page, 0, PAGE_SIZE);
+            map_pages(current->pgd, a, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE, pte_prot);
+        }
+    }
+
+    return (void *)start;
+}
+
 void handle_syscall(struct pt_regs *regs) {
     unsigned long syscall_num = regs->a7;
     unsigned long arg0 = regs->a0;
     unsigned long arg1 = regs->a1;
-    // unsigned long arg2 = regs->a2;
-    // unsigned long arg3 = regs->a3;
-    
+    unsigned long arg2 = regs->a2;
+    unsigned long arg3 = regs->a3;
+
     long ret = -1;
-    
+
     switch (syscall_num) {
         case 0:
             ret = sys_getpid();
@@ -507,11 +628,14 @@ void handle_syscall(struct pt_regs *regs) {
         case 12:
             ret = sys_kill((int)arg0, (int)arg1);
             break;
+        case 13:
+            ret = (long)sys_mmap((void *)arg0, arg1, (int)arg2, (int)arg3);
+            break;
         default:
             printf("Unknown syscall number: %ld\r\n", syscall_num);
             break;
     }
-    
+
     regs->a0 = ret;
     regs->epc += 4;
 }

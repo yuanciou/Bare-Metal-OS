@@ -82,6 +82,46 @@ void do_trap(struct pt_regs* regs) {
             handle_syscall(regs);
             check_signals(regs);
             return; // Syscall dispatcher manually adjusted EPC, return right after
+        } else if (cause == 12 || cause == 13 || cause == 15) { // Page Fault
+            unsigned long badaddr = regs->badaddr;
+            thread *current = get_cur_thread();
+            vm_area *vma = current->vmas;
+            int handled = 0;
+            while (vma) {
+                if (badaddr >= vma->start && badaddr < vma->end) {
+                    // Check permissions
+                    // For simplicity, we just check if it's in a VMA
+                    // In a real OS, we'd check vma->prot vs cause
+                    
+                    void *phys_page = allocate(PAGE_SIZE);
+                    if (phys_page) {
+                        memset(phys_page, 0, PAGE_SIZE);
+                        unsigned long pte_prot = PTE_V | PTE_U | PTE_A | PTE_D;
+                        if (vma->prot & PROT_READ) pte_prot |= PTE_R;
+                        if (vma->prot & PROT_WRITE) pte_prot |= (PTE_W | PTE_R); // R=1 if W=1
+                        if (vma->prot & PROT_EXEC) pte_prot |= PTE_X;
+                        
+                        map_pages(current->pgd, badaddr & ~(PAGE_SIZE - 1), (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE, pte_prot);
+                        // Flush TLB for the new mapping
+                        asm volatile("sfence.vma %0, zero" : : "r"(badaddr));
+                        handled = 1;
+                    }
+                    break;
+                }
+                vma = vma->next;
+            }
+            if (!handled) {
+                printf("Page Fault at 0x%lx (scause: %ld, sepc: 0x%lx)\r\n", badaddr, cause, regs->epc);
+                // Debug: list VMAs
+                printf("Available VMAs:\r\n");
+                vm_area *v = current->vmas;
+                while (v) {
+                    printf("  [0x%lx - 0x%lx] prot: 0x%lx\r\n", v->start, v->end, v->prot);
+                    v = v->next;
+                }
+                thread_exit();
+            }
+            return;
         } else {
             printf("Exception:\r\n");
             printf("  scause: 0x%lx\r\n", regs->cause);
@@ -121,7 +161,17 @@ int exec(const char* filename, unsigned long initrd_start) {
     }
 
     thread* current = get_cur_thread();
-    
+    if (current) {
+        // Clear old VMAs
+        vm_area *vma = current->vmas;
+        while (vma) {
+            vm_area *next = vma->next;
+            free(vma);
+            vma = next;
+        }
+        current->vmas = NULL;
+    }
+
     // Allocate new PGD for the user process
     unsigned long* new_pgd = (unsigned long*)allocate(PAGE_SIZE);
     memset(new_pgd, 0, PAGE_SIZE);
@@ -144,6 +194,11 @@ int exec(const char* filename, unsigned long initrd_start) {
         map_pages(new_pgd, i * PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE, 
                   PTE_V | PTE_R | PTE_W | PTE_X | PTE_U | PTE_A | PTE_D);
     }
+    // Add VMA for code
+    if (current) {
+        extern void add_vma(thread *t, unsigned long start, unsigned long length, unsigned long prot, unsigned long flags);
+        add_vma(current, 0, code_pages * PAGE_SIZE, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS);
+    }
 
     // Map user stack at virtual address 0x003f_ffff_f000
     unsigned long stack_top = 0x4000000000UL;
@@ -154,6 +209,11 @@ int exec(const char* filename, unsigned long initrd_start) {
         memset(phys_page, 0, PAGE_SIZE);
         map_pages(new_pgd, stack_base + i * PAGE_SIZE, (unsigned long)phys_page - PAGE_OFFSET, PAGE_SIZE,
                   PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D);
+    }
+    // Add VMA for stack
+    if (current) {
+        extern void add_vma(thread *t, unsigned long start, unsigned long length, unsigned long prot, unsigned long flags);
+        add_vma(current, stack_base, USER_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS);
     }
 
     // Update thread struct

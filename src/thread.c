@@ -198,6 +198,15 @@ void kill_zombies(void) {
             if (to_free->pgd && to_free->pgd != kernel_pgd) {
                 free_pgd(to_free->pgd);
             }
+
+            // Free VMAs
+            vm_area *vma = to_free->vmas;
+            while (vma) {
+                vm_area *next = vma->next;
+                free(vma);
+                vma = next;
+            }
+
             free(to_free);
             
             if (run_queue == NULL) break;
