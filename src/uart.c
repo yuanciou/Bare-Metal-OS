@@ -133,24 +133,11 @@ void uart_putc_polling(char c) {
     *UART_THR = c;
 }
 
-static volatile int uart_mutex = 0;
-
-static void uart_lock() {
-    while (__sync_lock_test_and_set(&uart_mutex, 1))
-        while (uart_mutex);
-}
-
-static void uart_unlock() {
-    __sync_lock_release(&uart_mutex);
-}
-
 char uart_getc() {
-    uart_lock();
     if (uart_async) {
         char c;
         // check the ring buffer first
         if (ringbuf_pop(&rx_ring, &c)) {
-            uart_unlock();
             return c == '\r' ? '\n' : c;
         }
         
@@ -158,72 +145,49 @@ char uart_getc() {
         if (irq_enabled()) {
             while (!ringbuf_pop(&rx_ring, &c)) {
                 // if the interrupt is enabled -> wait for interrupt
-                uart_unlock();
                 asm volatile("wfi");
-                uart_lock();
             }
-            uart_unlock();
             return c == '\r' ? '\n' : c;
         } else {
             // use polling when buffer is empty and the interrupt is disabled
-            char res = uart_getc_polling();
-            uart_unlock();
-            return res; 
+            return uart_getc_polling(); 
         }
     } else {
-        char res = uart_getc_polling();
-        uart_unlock();
-        return res;
+        return uart_getc_polling();
     }
 }
 
 char uart_getc_raw() {
-    uart_lock();
     if (uart_async) {
         char c;
-        if (ringbuf_pop(&rx_ring, &c)) {
-            uart_unlock();
-            return c;
-        }
+        if (ringbuf_pop(&rx_ring, &c)) return c; // check buffer first
         
         if (irq_enabled()) {
             while (!ringbuf_pop(&rx_ring, &c)) {
-                uart_unlock();
                 asm volatile("wfi");
-                uart_lock();
             }
-            uart_unlock();
             return c;
         } else {
-            char res = uart_getc_raw_polling();
-            uart_unlock();
-            return res; 
+            return uart_getc_raw_polling(); 
         }
     } else {
-        char res = uart_getc_raw_polling();
-        uart_unlock();
-        return res;
+        return uart_getc_raw_polling();
     }
 }
 
 int uart_getc_nonblocking() {
-    uart_lock();
     if (uart_async) {
         char c;
         // get data from the ring buffer
         if (ringbuf_pop(&rx_ring, &c)) {
-            uart_unlock();
             return c == '\r' ? '\n' : c;
         }
         // if the buffer is empty
         // -> return -1 to let the caller decide whether to wait or do something else
-        uart_unlock();
         return -1; 
     } else {
         // not async -> polling
-        char res = uart_getc_polling();
-        uart_unlock();
-        return res;
+        return uart_getc_polling();
     }
 }
 
@@ -231,21 +195,17 @@ void uart_putc(char c) {
     if (c == '\n')
         uart_putc('\r');
 
-    uart_lock();
     if (uart_async && irq_enabled()) { // check if async mode is enabled
         while (!ringbuf_push(&tx_ring, c)) {
             // buffer full, enable tx irq to drain it safely if possible
             *UART_IER |= (1 << 1); // enable the THRI bit to let the interrupt handler drain the buffer
-            uart_unlock();
             asm volatile("wfi"); // wait for interrupt (ring buffer has space after draining) 
-            uart_lock();
         }
         *UART_IER |= (1 << 1); // enable the THRI bit to let the interrupt handler drain the buffer
         uart_try_tx(); // attempt to start transfer if idle
     } else {
         uart_putc_polling(c);
     }
-    uart_unlock();
 }
 
 void uart_puts(const char* s) {
