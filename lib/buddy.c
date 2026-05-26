@@ -163,6 +163,7 @@ void buddy_init(void) {
         }
         frame_array[i].meta_pool_idx = -1;
         frame_array[i].ref_count = 0;
+        frame_array[i].cow_ref_count = 0;
         
         // init the list head
         INIT_LIST_HEAD(&frame_array[i].node);
@@ -247,6 +248,7 @@ void *buddy_alloc_pages(unsigned int order) {
         }
 
         mark_block(idx, order, PAGE_STATE_ALLOC_PAGE_HEAD, PAGE_STATE_ALLOC_PAGE_TAIL);
+        frame_array[idx].cow_ref_count = 1;
         BUDDY_LOG("[Page Buddy] Allocate 0x%lx at order %u, page %lu\r\n",
                   page_to_addr(idx),
                   order,

@@ -503,6 +503,27 @@ void free(void *ptr) {
             return;
         }
 
-        buddy_free_pages(ptr);
+        frame_array[page_idx].cow_ref_count--;
+        if (frame_array[page_idx].cow_ref_count == 0) {
+            buddy_free_pages(ptr);
+        }
     }
+}
+
+void page_inc_ref(void *ptr) {
+    unsigned long addr = (unsigned long)ptr;
+    if (!(G_MEMPOOL_SIZE != 0 && addr >= G_MEMPOOL_START && addr < G_MEMPOOL_START + G_MEMPOOL_SIZE)) {
+        return;
+    }
+    unsigned long page_idx = addr_to_page_idx(addr);
+    frame_array[page_idx].cow_ref_count++;
+}
+
+int get_page_ref(void *ptr) {
+    unsigned long addr = (unsigned long)ptr;
+    if (!(G_MEMPOOL_SIZE != 0 && addr >= G_MEMPOOL_START && addr < G_MEMPOOL_START + G_MEMPOOL_SIZE)) {
+        return 0;
+    }
+    unsigned long page_idx = addr_to_page_idx(addr);
+    return frame_array[page_idx].cow_ref_count;
 }

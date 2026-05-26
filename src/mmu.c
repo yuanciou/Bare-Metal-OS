@@ -1,6 +1,7 @@
 #include "mmu.h"
 #include "config.h"
 #include "thread.h"
+#include "allocator.h"
 #include "../lib/string.h"
 
 // We need a statically allocated page for the root page table (PGD)
@@ -63,7 +64,7 @@ unsigned long* kernel_pgd = NULL;
 extern void* allocate(unsigned long size);
 extern void free(void* ptr);
 
-static unsigned long* pagewalk(unsigned long* pgd, unsigned long va, int alloc) {
+unsigned long* pagewalk(unsigned long* pgd, unsigned long va, int alloc) {
     unsigned long vpn2 = (va >> PGD_SHIFT) & VPN_MASK;
     unsigned long vpn1 = (va >> PMD_SHIFT) & VPN_MASK;
     unsigned long vpn0 = (va >> PTE_SHIFT) & VPN_MASK;
@@ -139,17 +140,18 @@ unsigned long* copy_pgd(unsigned long* pgd) {
                     for (int k = 0; k < 512; k++) {
                         if (parent_pt[k] & PTE_V) {
                             unsigned long parent_pa = (parent_pt[k] >> 10) << 12;
-                            unsigned long* child_page = (unsigned long*)allocate(PAGE_SIZE);
-                            if (!child_page) { free_pgd(new_pgd); return NULL; }
-                            // Copy data from parent physical page to child physical page
-                            memcpy(child_page, (void*)(parent_pa + PAGE_OFFSET), PAGE_SIZE);
-                            child_pt[k] = (((unsigned long)child_page - PAGE_OFFSET) >> 12 << 10) | (parent_pt[k] & 0x3FF);
+                            // Clear W bit for both parent and child
+                            parent_pt[k] &= ~PTE_W;
+                            child_pt[k] = parent_pt[k];
+                            // Increment ref count
+                            page_inc_ref((void*)(parent_pa + PAGE_OFFSET));
                         }
                     }
                 }
             }
         }
     }
+    asm volatile("sfence.vma");
     return new_pgd;
 }
 

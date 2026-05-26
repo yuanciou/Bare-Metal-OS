@@ -37,6 +37,7 @@ void map_pages(unsigned long va, unsigned long size, unsigned long pa, unsigned 
 void map_user_pages(unsigned long va, unsigned long size, unsigned long pa, unsigned long prot);
 unsigned long* copy_pgd(unsigned long* pgd);
 void free_pgd(unsigned long* pgd);
+unsigned long* pagewalk(unsigned long* pgd, unsigned long va, int alloc);
 
 extern unsigned long* kernel_pgd;
 

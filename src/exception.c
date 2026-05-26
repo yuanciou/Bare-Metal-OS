@@ -89,7 +89,35 @@ void do_trap(struct pt_regs* regs) {
             int handled = 0;
             while (vma) {
                 if (badaddr >= vma->start && badaddr < vma->end) {
-                    // Check permissions
+                    // Check if it is a CoW event: Store fault on a read-only page in a writable VMA
+                    if (cause == 15 && (vma->prot & PROT_WRITE)) {
+                        unsigned long *pte = pagewalk(current->pgd, badaddr, 0);
+                        if (pte && (*pte & PTE_V) && !(*pte & PTE_W)) {
+                            // Permission fault (CoW)
+                            printf("[Permission fault]: %lx\n", badaddr);
+                            unsigned long old_pa = (*pte >> 10) << 12;
+                            void *old_page = (void *)(old_pa + PAGE_OFFSET);
+                            
+                            if (get_page_ref(old_page) > 1) {
+                                void *new_page = allocate(PAGE_SIZE);
+                                if (new_page) {
+                                    memcpy(new_page, old_page, PAGE_SIZE);
+                                    // Update PTE
+                                    *pte = (((unsigned long)new_page - PAGE_OFFSET) >> 12 << 10) | (*pte & 0x3FF) | PTE_W;
+                                    free(old_page); // Decrement cow_ref_count
+                                }
+                            } else {
+                                // Only one owner, just make it writable
+                                *pte |= PTE_W;
+                            }
+                            // Flush TLB
+                            asm volatile("sfence.vma %0, zero" : : "r"(badaddr));
+                            handled = 1;
+                            break;
+                        }
+                    }
+
+                    // Check permissions for normal translation fault
                     int permission_ok = 1;
                     if (cause == 12 && !(vma->prot & PROT_EXEC)) permission_ok = 0;
                     if (cause == 13 && !(vma->prot & PROT_READ)) permission_ok = 0;
