@@ -11,6 +11,8 @@ CFLAGS = -mcmodel=medany -fno-pie -ffreestanding -nostdlib -g -Wall -march=rv64g
 
 # ----------------------------------------------------
 # 根據下達的指令，自動加上對應的 CFLAGS (取代原本的 ifeq)
+# LDFLAGS: flags for linker
+# --defsym -> Define Symbols
 # ----------------------------------------------------
 qemu: CFLAGS += -DQEMU
 qemu: LDFLAGS += --defsym=LOAD_ADDR=0x80200000

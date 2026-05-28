@@ -129,11 +129,12 @@ void schedule(void) {
 
     // if the candidate thread is not as same as the current -> switch to it
     if (prev != next) {
-        // Switch address space if necessary
+        // Switch address space if necessary (user has its PGD, kernel is NULL)
         unsigned long* next_pgd = next->pgd ? next->pgd : kernel_pgd;
         unsigned long* prev_pgd = prev->pgd ? prev->pgd : kernel_pgd;
 
         if (next_pgd != prev_pgd) {
+            // if the PGD is different, switch the address space by writing to satp and flushing the TLB with sfence.vma
             unsigned long satp_val = MAKE_SATP((unsigned long)next_pgd - PAGE_OFFSET);
             asm volatile(
                 "csrw satp, %0\n"
@@ -197,6 +198,8 @@ void kill_zombies(void) {
             if (to_free->user_stack) {
                 free((void*)to_free->user_stack);
             }
+
+            // free the PGD if it's not the kernel PGD (shared by all threads without user space)
             if (to_free->pgd && to_free->pgd != kernel_pgd) {
                 free_pgd(to_free->pgd);
             }

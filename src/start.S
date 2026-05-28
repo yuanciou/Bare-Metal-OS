@@ -19,10 +19,6 @@ clear_bss_done:
     // Set up a temporary stack for setup_vm
     la sp, _end
 
-    // Set stvec to a temporary identity-mapped handler in case of exceptions during setup_vm
-    la t0, 1f
-    csrw stvec, t0
-
     // Save hartid and fdt to s-registers (callee-saved)
     mv s0, a0
     mv s1, a1
@@ -39,6 +35,7 @@ clear_bss_done:
     addi sp, sp, 16
 
     // setup_vm returns PAGE_OFFSET
+    // add the 1f(PA) with PAGE_OFFSET
     la t0, 1f
     add t0, t0, a0
     jr t0

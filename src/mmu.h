@@ -3,12 +3,12 @@
 
 #include "config.h"
 
-#define PAGE_OFFSET 0xffffffc000000000UL
+#define PAGE_OFFSET 0xffffffc000000000UL    // map kernel at high half VA
 
 /* Sv39 VA bit-field shifts */
-#define PGD_SHIFT 30
-#define PMD_SHIFT 21
-#define PTE_SHIFT 12
+#define PGD_SHIFT 30        // VPN[2]
+#define PMD_SHIFT 21        // VPN[1]
+#define PTE_SHIFT 12        // VPN[0]
 #define VPN_MASK  0x1FF
 
 /* PTE descriptor bits (Sv39) */
@@ -25,6 +25,7 @@
 #define PROT_MMIO   (PTE_V | PTE_R | PTE_W | PTE_G | PTE_A | PTE_D)
 
 #define SATP_SV39   (8UL << 60)
+// merge mode and PPN
 #define MAKE_SATP(pgd_pa) (SATP_SV39 | ((unsigned long)(pgd_pa) >> 12))
 
 #ifndef __ASSEMBLER__
@@ -34,7 +35,7 @@ void mmu_init(void);
 void drop_identity_map(void);
 void map_pages_at(unsigned long* pgd, unsigned long va, unsigned long pa, unsigned long size, unsigned long prot);
 void map_pages(unsigned long va, unsigned long size, unsigned long pa, unsigned long prot);
-void map_user_pages(unsigned long va, unsigned long size, unsigned long pa, unsigned long prot);
+// void map_user_pages(unsigned long va, unsigned long size, unsigned long pa, unsigned long prot);
 unsigned long* copy_pgd(unsigned long* pgd);
 void free_pgd(unsigned long* pgd);
 unsigned long* pagewalk(unsigned long* pgd, unsigned long va, int alloc);
