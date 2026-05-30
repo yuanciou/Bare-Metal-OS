@@ -27,20 +27,29 @@ void check_signals(struct pt_regs *regs) {
                 // Save current context
                 current->signal_saved_regs = *regs;
 
-                // Allocate signal stack
-                current->signal_stack_page = (unsigned long)allocate(4096);
+                // Allocate signal stack physical page
+                void *sig_phys = allocate(4096);
+                memset(sig_phys, 0, 4096);
+                current->signal_stack_page = (unsigned long)sig_phys; // store PA + PAGE_OFFSET
                 
+                // Map the signal stack page to user space at a fixed address
+                unsigned long sig_vaddr = 0x3000000000UL;
+                map_pages_at(current->pgd, sig_vaddr, (unsigned long)sig_phys - PAGE_OFFSET, 4096, PTE_V | PTE_U | PTE_R | PTE_W | PTE_X | PTE_A | PTE_D);
+
                 // Copy sigreturn trampoline to signal stack
                 unsigned long stub_size = (unsigned long)sigreturn_stub_end - (unsigned long)sigreturn_stub;
-                unsigned long trampoline = current->signal_stack_page + 4096 - stub_size; // cal the stack top
-                memcpy((void*)trampoline, (void*)sigreturn_stub, stub_size);
+                unsigned long trampoline_kern = current->signal_stack_page + 4096 - stub_size;
+                memcpy((void*)trampoline_kern, (void*)sigreturn_stub, stub_size);
 
-                // Flush I-cache for the trampoline
+                // Flush I-cache and TLB
                 asm volatile("fence.i");
+                asm volatile("sfence.vma %0, zero" : : "r"(sig_vaddr));
+
+                unsigned long trampoline_user = sig_vaddr + 4096 - stub_size;
 
                 // Redirect to handler
-                regs->ra = trampoline; // set return addr to trampoline so that the sigreturn will execute when handler finish
-                regs->sp = trampoline; // the stack top for the signal handler to use
+                regs->ra = trampoline_user; 
+                regs->sp = trampoline_user; 
                 regs->epc = current->signal_handler[i];
                 
                 break;

@@ -137,11 +137,6 @@ long sys_getpid(void) {
 long sys_uart_read(char *buf, long count) {
     long read_count = 0;
     
-    // Enable SUM to access user buffer
-    unsigned long saved_sstatus;
-    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
-    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus | (1UL << 18)));
-
     // enable interrupt to allow UART and timer interrupts during read
     asm volatile("csrs sstatus, %0" : : "r"(1 << 1));
 
@@ -152,13 +147,22 @@ long sys_uart_read(char *buf, long count) {
             // no char available -> yield the CPU
             schedule(); 
         }
+        
+        // Enable SUM to access user buffer and disable interrupts
+        unsigned long saved_sstatus;
+        asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+        unsigned long new_sstatus = (saved_sstatus | (1UL << 18)) & ~(1UL << 1);
+        asm volatile("csrw sstatus, %0" : : "r"(new_sstatus));
+        
         // read char into buffer
         buf[read_count++] = (char)c;
+        
+        // Restore sstatus
+        asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
     }
     
-    // disable interrupt and restore sstatus
+    // disable interrupt
     asm volatile("csrc sstatus, %0" : : "r"(1 << 1));
-    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
     
     return read_count;
 }
@@ -170,17 +174,20 @@ long sys_uart_read(char *buf, long count) {
 long sys_uart_write(const char *buf, long count) {
     long write_count = 0;
     
-    // Enable SUM to access user buffer
-    unsigned long saved_sstatus;
-    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
-    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus | (1UL << 18)));
-
     while (write_count < count) {
-        uart_putc(buf[write_count++]);
+        // Enable SUM to access user buffer and disable interrupts
+        unsigned long saved_sstatus;
+        asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+        unsigned long new_sstatus = (saved_sstatus | (1UL << 18)) & ~(1UL << 1);
+        asm volatile("csrw sstatus, %0" : : "r"(new_sstatus));
+        
+        char c = buf[write_count++];
+        
+        // Restore sstatus
+        asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+        
+        uart_putc(c);
     }
-
-    // Restore sstatus
-    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
 
     return write_count;
 }
@@ -193,10 +200,11 @@ int sys_exec(const char *path, struct pt_regs *regs) {
     const char *data = 0;
     int size = 0;
 
-    // Enable SUM to access path from user space
+    // Enable SUM to access path from user space and disable interrupts
     unsigned long saved_sstatus;
     asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
-    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus | (1UL << 18)));
+    unsigned long new_sstatus = (saved_sstatus | (1UL << 18)) & ~(1UL << 1);
+    asm volatile("csrw sstatus, %0" : : "r"(new_sstatus));
 
     // set `data` to the start addr of the user program
     extern const void *kernel_fdt;
@@ -438,9 +446,11 @@ int sys_stop(long pid) {
  */
 void sys_display(unsigned int *bmp_image, unsigned int width, unsigned int height) {
     // Enable SUM (Supervisor User Memory) to access user memory in supervisor mode
+    // and disable interrupts to prevent context switches while SUM is set.
     unsigned long saved_sstatus;
     asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
-    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus | (1UL << 18))); // bit 18 is SUM
+    unsigned long new_sstatus = (saved_sstatus | (1UL << 18)) & ~(1UL << 1);
+    asm volatile("csrw sstatus, %0" : : "r"(new_sstatus));
 
     video_bmp_display(bmp_image, width, height);
 
@@ -479,6 +489,13 @@ void sys_sigreturn(struct pt_regs *regs) {
     if (current->signal_stack_page) {
         free((void*)current->signal_stack_page);
         current->signal_stack_page = 0;
+        
+        // Unmap the user page
+        unsigned long *pte = pagewalk(current->pgd, 0x3000000000UL, 0);
+        if (pte) {
+            *pte = 0;
+            asm volatile("sfence.vma %0, zero" : : "r"(0x3000000000UL));
+        }
     }
 
     // restore the original context saved before jumping back
