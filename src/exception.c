@@ -83,6 +83,7 @@ void do_trap(struct pt_regs* regs) {
             check_signals(regs);
             return; // Syscall dispatcher manually adjusted EPC, return right after
         } else if (cause == 12 || cause == 13 || cause == 15) { // Page Fault
+            // 12 Instruction Page Fault, 13 Load Page Fault, 15 Store Page Fault
             unsigned long badaddr = regs->badaddr;
             thread *current = get_cur_thread();
             vm_area *vma = current->vmas;
@@ -90,19 +91,19 @@ void do_trap(struct pt_regs* regs) {
             while (vma) {
                 if (badaddr >= vma->start && badaddr < vma->end) {
                     // Check if it is a CoW event: Store fault on a read-only page in a writable VMA
-                    if (cause == 15 && (vma->prot & PROT_WRITE)) {
+                    if (cause == 15 && (vma->prot & PROT_WRITE)) { // VMA-writable store fault could be CoW
                         unsigned long *pte = pagewalk(current->pgd, badaddr, 0);
                         if (pte && (*pte & PTE_V) && !(*pte & PTE_W)) {
                             // Permission fault (CoW)
                             printf("[Permission fault]: %lx\n", badaddr);
-                            unsigned long old_pa = (*pte >> 10) << 12;
+                            unsigned long old_pa = (*pte >> 10) << 12; // old physical address
                             void *old_page = (void *)(old_pa + PAGE_OFFSET);
                             
                             if (get_page_ref(old_page) > 1) {
                                 void *new_page = allocate(PAGE_SIZE);
                                 if (new_page) {
                                     memcpy(new_page, old_page, PAGE_SIZE);
-                                    // Update PTE
+                                    // Update PTE (0x3FF 10-bit flags)
                                     *pte = (((unsigned long)new_page - PAGE_OFFSET) >> 12 << 10) | (*pte & 0x3FF) | PTE_W;
                                     free(old_page); // Decrement cow_ref_count
                                 }
@@ -136,7 +137,7 @@ void do_trap(struct pt_regs* regs) {
                         
                         // If it's backed by data (e.g. code), copy it
                         if (vma->file_data) {
-                            unsigned long vma_offset = (badaddr & ~(PAGE_SIZE - 1)) - vma->start;
+                            unsigned long vma_offset = (badaddr & ~(PAGE_SIZE - 1)) - vma->start; // align down to 4KB page boundary
                             if (vma_offset < vma->file_size) {
                                 unsigned long copy_size = vma->file_size - vma_offset;
                                 if (copy_size > PAGE_SIZE) copy_size = PAGE_SIZE;
