@@ -48,7 +48,20 @@ vm_area* add_vma(thread *t, unsigned long start, unsigned long length, unsigned 
     return new_vma;
 }
 
-static unsigned long find_free_vma_region(thread *t, unsigned long length) {
+void remove_vma(thread *t, unsigned long start) {
+    vm_area **curr = &t->vmas;
+    while (*curr) {
+        if ((*curr)->start == start) {
+            vm_area *to_free = *curr;
+            *curr = (*curr)->next;
+            free(to_free);
+            return;
+        }
+        curr = &((*curr)->next);
+    }
+}
+
+unsigned long find_free_vma_region(thread *t, unsigned long length) {
     unsigned long addr = 0x10000000; // Start searching from 256MB
     while (1) {
         int overlap = 0;
@@ -303,6 +316,7 @@ long sys_fork(struct pt_regs *parent_regs) {
     child->sigpending = 0;
     child->is_handling_signal = 0;
     child->signal_stack_page = 0;
+    child->signal_stack_vaddr = 0;
     
     // Clone Kernel Stack
     child->kernel_stack = (unsigned long)allocate(KERNEL_STACK_SIZE);
@@ -491,11 +505,16 @@ void sys_sigreturn(struct pt_regs *regs) {
         current->signal_stack_page = 0;
         
         // Unmap the user page
-        unsigned long *pte = pagewalk(current->pgd, 0x3000000000UL, 0);
+        unsigned long vaddr = current->signal_stack_vaddr;
+        unsigned long *pte = pagewalk(current->pgd, vaddr, 0);
         if (pte) {
             *pte = 0;
-            asm volatile("sfence.vma %0, zero" : : "r"(0x3000000000UL));
+            asm volatile("sfence.vma %0, zero" : : "r"(vaddr));
         }
+        
+        // Remove the VMA record so the address becomes free for mmap
+        remove_vma(current, vaddr);
+        current->signal_stack_vaddr = 0;
     }
 
     // restore the original context saved before jumping back

@@ -32,8 +32,12 @@ void check_signals(struct pt_regs *regs) {
                 memset(sig_phys, 0, 4096);
                 current->signal_stack_page = (unsigned long)sig_phys; // store PA + PAGE_OFFSET
                 
-                // Map the signal stack page to user space at a fixed address
-                unsigned long sig_vaddr = 0x3000000000UL;
+                // Find a free VMA region for the signal stack and record it
+                unsigned long sig_vaddr = find_free_vma_region(current, 4096);
+                current->signal_stack_vaddr = sig_vaddr;
+                add_vma(current, sig_vaddr, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS);
+
+                // Map the signal stack page to user space at the dynamic address
                 map_pages_at(current->pgd, sig_vaddr, (unsigned long)sig_phys - PAGE_OFFSET, 4096, PTE_V | PTE_U | PTE_R | PTE_W | PTE_X | PTE_A | PTE_D);
 
                 // Copy sigreturn trampoline to signal stack

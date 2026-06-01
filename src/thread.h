@@ -62,6 +62,7 @@ typedef struct thread {
     int is_handling_signal;
     struct pt_regs signal_saved_regs;   // saved register when handling interrupt
     unsigned long signal_stack_page;
+    unsigned long signal_stack_vaddr;   // dynamic virtual address for the signal stack
 } thread;
 
 void init_thread_system(void);
@@ -74,6 +75,11 @@ thread* get_cur_thread(void);
 void switch_to(thread* prev, thread* next);
 void enqueue(thread** queue, thread* t);
 int thread_sleep(unsigned int usec);
+
+/* VMA management */
+vm_area* add_vma(thread *t, unsigned long start, unsigned long length, unsigned long prot, unsigned long flags);
+void remove_vma(thread *t, unsigned long start);
+unsigned long find_free_vma_region(thread *t, unsigned long length);
 
 extern thread* run_queue;
 extern int nr_threads;
