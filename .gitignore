@@ -4,6 +4,6 @@
 *.bin
 *.fit
 TODO.md
-ex61/*
-ex62/*
+ex71/*
+ex72/*
 rootfs/*

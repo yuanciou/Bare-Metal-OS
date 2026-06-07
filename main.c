@@ -13,6 +13,7 @@
 #include "src/thread.h"
 #include "src/video.h"
 #include "src/mmu.h"
+#include "src/vfs.h"
 
 struct timeout_args {
     char *message;
@@ -90,6 +91,52 @@ void user_program_loader(void) {
 // }
 
 
+static void vfs_test() {
+    struct file* a;
+    struct file* b;
+    char buf[100];
+    int res;
+
+    printf("--- VFS Test Start ---\r\n");
+
+    // 1. Create and write to a file
+    res = vfs_open("/test_file", O_CREAT, &a);
+    if (res != 0) { printf("vfs_open failed\r\n"); return; }
+    printf("Created /test_file\r\n");
+    
+    vfs_write(a, "Hello VFS!", 10);
+    printf("Wrote 'Hello VFS!' to /test_file\r\n");
+    vfs_close(a);
+
+    // 2. Read back
+    res = vfs_open("/test_file", 0, &a);
+    if (res != 0) { printf("vfs_open (read) failed\r\n"); return; }
+    memset(buf, 0, sizeof(buf));
+    res = vfs_read(a, buf, 10);
+    printf("Read from /test_file: '%s', size: %d\r\n", buf, res);
+    vfs_close(a);
+
+    // 3. Directory and nested file
+    res = vfs_mkdir("/dir1");
+    if (res != 0) { printf("vfs_mkdir failed\r\n"); return; }
+    printf("Created directory /dir1\r\n");
+
+    res = vfs_open("/dir1/nested", O_CREAT, &b);
+    if (res != 0) { printf("vfs_open /dir1/nested failed\r\n"); return; }
+    vfs_write(b, "Nested Content", 14);
+    printf("Wrote to /dir1/nested\r\n");
+    vfs_close(b);
+
+    // 4. Verification of nested file
+    res = vfs_open("/dir1/nested", 0, &b);
+    memset(buf, 0, sizeof(buf));
+    vfs_read(b, buf, 14);
+    printf("Read from /dir1/nested: '%s'\r\n", buf);
+    vfs_close(b);
+
+    printf("--- VFS Test End ---\r\n");
+}
+
 void run_shell(unsigned long hartid, const void *fdt) {
     char buffer[256];
     int idx = 0;
@@ -121,6 +168,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
             printf("  help - show all commands.\r\n");
             printf("  hello - print Hello world.\r\n");
             printf("  info - print system info.\r\n");
+            printf("  vfs_test - run VFS and tmpfs basic tests.\r\n");
             printf("  ls - list files in initramfs.\r\n");
             printf("  cat [file] - print file content in initramfs.\r\n");
             printf("  exec [file] - execute user program in U-mode.\r\n");
@@ -129,6 +177,8 @@ void run_shell(unsigned long hartid, const void *fdt) {
             printf("  kill [pid] - send SIGTERM to a process.\r\n");
         } else if (strcmp(buffer, "hello") == 0) {
             printf("Hello world.\r\n");
+        } else if (strcmp(buffer, "vfs_test") == 0) {
+            vfs_test();
         } else if (strcmp(buffer, "info") == 0) {
             printf("System information:\r\n");
             printf("  OpenSBI specification version: ");
@@ -279,6 +329,9 @@ void start_kernel(unsigned long hartid, const void *fdt) {
     
     // Video Init
     video_init();
+
+    // VFS Init
+    vfs_init();
 
     printf("Hello from Main Kernel! Initialization done.\r\n");
 

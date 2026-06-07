@@ -32,6 +32,17 @@ char *strcpy(char *dest, const char *src) {
     return dest;
 }
 
+char *strncpy(char *dest, const char *src, size_t n) {
+    char *d = dest;
+    while (n && (*d++ = *src++)) {
+        n--;
+    }
+    while (n--) {
+        *d++ = '\0';
+    }
+    return dest;
+}
+
 void *memset(void *s, int c, size_t n) {
     unsigned char *p = s;
     while (n--) {
