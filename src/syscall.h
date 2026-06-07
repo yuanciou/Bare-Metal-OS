@@ -17,6 +17,16 @@ int sys_usleep(unsigned int usec);
 long sys_signal(int signum, void (*handler)());
 void sys_sigreturn(struct pt_regs *regs);
 int sys_kill(int pid, int signum);
+void *sys_mmap(void *addr, unsigned long length, int prot, int flags);
+
+// VFS System calls
+int sys_open(const char *pathname, int flags);
+int sys_close(int fd);
+long sys_read(int fd, void *buf, unsigned long count);
+long sys_write(int fd, const void *buf, unsigned long count);
+int sys_mkdir(const char *pathname, unsigned mode);
+int sys_mount(const char *src, const char *target, const char *filesystem, unsigned long flags, const void *data);
+int sys_chdir(const char *path);
 
 // Handle the syscall dispatched from exception
 void handle_syscall(struct pt_regs *regs);

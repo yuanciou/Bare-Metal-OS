@@ -12,6 +12,7 @@ struct vnode {
     struct vnode_operations* v_ops;
     struct file_operations* f_ops;
     void* internal;
+    struct vnode* parent;
 };
 
 // file handle
@@ -20,6 +21,7 @@ struct file {
     size_t f_pos;  // RW position of this file handle
     struct file_operations* f_ops;
     int flags;
+    int ref_count;
 };
 
 struct mount {

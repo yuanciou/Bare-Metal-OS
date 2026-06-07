@@ -14,6 +14,7 @@
 #include "src/video.h"
 #include "src/mmu.h"
 #include "src/vfs.h"
+#include "src/syscall.h"
 
 struct timeout_args {
     char *message;
@@ -93,85 +94,69 @@ void user_program_loader(void) {
 
 static void vfs_test() {
     struct file* a;
-    struct file* b;
     char buf[100];
     int res;
 
-    printf("--- VFS Test Start ---\r\n");
+    printf("--- VFS Exercise 3 Test Start ---\r\n");
 
-    // 1. Create and write to a file in root
+    // 1. Basic Create and Write
     res = vfs_open("/test_file", O_CREAT, &a);
     if (res != 0) { printf("vfs_open failed\r\n"); return; }
-    printf("Created /test_file\r\n");
-    
     vfs_write(a, "Hello VFS!", 10);
-    printf("Wrote 'Hello VFS!' to /test_file\r\n");
     vfs_close(a);
+    printf("1. Created and wrote to /test_file\r\n");
 
-    // 2. Read back
-    res = vfs_open("/test_file", 0, &a);
-    if (res != 0) { printf("vfs_open (read) failed\r\n"); return; }
-    memset(buf, 0, sizeof(buf));
-    res = vfs_read(a, buf, 10);
-    printf("Read from /test_file: '%s', size: %d\r\n", buf, res);
-    vfs_close(a);
+    // 2. Relative Path and CWD Test
+    vfs_mkdir("/dir1");
+    sys_chdir("/dir1");
+    printf("2. mkdir /dir1 and chdir to /dir1\r\n");
 
-    // 3. Directory and nested file
-    res = vfs_mkdir("/dir1");
-    if (res != 0) { printf("vfs_mkdir failed\r\n"); return; }
-    printf("Created directory /dir1\r\n");
+    // Create file using relative path
+    res = vfs_open("relative_file", O_CREAT, &a);
+    if (res == 0) {
+        vfs_write(a, "Relative Path Success", 21);
+        vfs_close(a);
+        printf("   Success: Created 'relative_file' inside /dir1 using relative path\r\n");
+    } else {
+        printf("   Fail: Could not create 'relative_file' using relative path\r\n");
+    }
 
-    res = vfs_open("/dir1/nested", O_CREAT, &b);
-    if (res != 0) { printf("vfs_open /dir1/nested failed\r\n"); return; }
-    vfs_write(b, "Nested Content", 14);
-    printf("Wrote to /dir1/nested\r\n");
-    vfs_close(b);
+    // 3. Special components "." and ".."
+    struct vnode* target;
+    res = vfs_lookup(".", &target);
+    if (res == 0) printf("3. Lookup '.' success\r\n");
+    
+    res = vfs_lookup("..", &target);
+    if (res == 0 && target == rootfs->root) printf("   Lookup '..' resolved to root success\r\n");
 
-    // 4. Verification of nested file
-    res = vfs_open("/dir1/nested", 0, &b);
-    memset(buf, 0, sizeof(buf));
-    vfs_read(b, buf, 14);
-    printf("Read from /dir1/nested: '%s'\r\n", buf);
-    vfs_close(b);
+    sys_chdir("/"); // Back to root
+    res = vfs_open("dir1/../test_file", 0, &a);
+    if (res == 0) {
+        printf("   Lookup 'dir1/../test_file' success\r\n");
+        vfs_close(a);
+    }
 
-    // 5. Mounting test
+    // 4. File Descriptor Table (FDT) Test via sys_calls
+    int fd = sys_open("/test_file", 0);
+    if (fd >= 0) {
+        memset(buf, 0, sizeof(buf));
+        sys_read(fd, buf, 10);
+        printf("4. sys_open and sys_read success: '%s'\r\n", buf);
+        sys_close(fd);
+    } else {
+        printf("4. sys_open failed\r\n");
+    }
+
+    // 5. Mounting and '..' crossing boundary
     vfs_mkdir("/mnt");
-    res = vfs_mount("/mnt", "tmpfs");
-    if (res != 0) { printf("vfs_mount failed\r\n"); return; }
-    printf("Mounted tmpfs on /mnt\r\n");
-
-    // Create a file in the newly mounted filesystem
-    res = vfs_open("/mnt/mount_test", O_CREAT, &a);
-    if (res != 0) { printf("vfs_open /mnt/mount_test failed\r\n"); return; }
-    vfs_write(a, "Cross Mount!", 12);
-    vfs_close(a);
-
-    // Verify lookup crosses mount point correctly
-    res = vfs_open("/mnt/mount_test", 0, &a);
-    if (res != 0) { printf("vfs_open (read) /mnt/mount_test failed\r\n"); return; }
-    memset(buf, 0, sizeof(buf));
-    vfs_read(a, buf, 12);
-    printf("Read from /mnt/mount_test: '%s'\r\n", buf);
-    vfs_close(a);
-
-    // 6. Path robustness test (multiple slashes and trailing slashes)
-    res = vfs_open("//dir1///nested", 0, &a);
-    if (res == 0) {
-        printf("Success: //dir1///nested resolved correctly\r\n");
-        vfs_close(a);
-    } else {
-        printf("Fail: //dir1///nested resolution failed\r\n");
+    vfs_mount("/mnt", "tmpfs");
+    sys_chdir("/mnt");
+    res = vfs_lookup("..", &target);
+    if (res == 0 && target == rootfs->root) {
+        printf("5. Mounted tmpfs at /mnt, '..' from /mnt correctly resolved to root\r\n");
     }
 
-    res = vfs_open("/dir1/", 0, &a);
-    if (res == 0) {
-        printf("Success: /dir1/ resolved correctly\r\n");
-        vfs_close(a);
-    } else {
-        printf("Fail: /dir1/ resolution failed\r\n");
-    }
-
-    printf("--- VFS Test End ---\r\n");
+    printf("--- VFS Exercise 3 Test End ---\r\n");
 }
 
 void run_shell(unsigned long hartid, const void *fdt) {
@@ -317,13 +302,11 @@ void run_shell(unsigned long hartid, const void *fdt) {
             // This is just to test if the syscall works from kernel mode too, 
             // or if the user shell calls it.
             // Requirement says "Type signal in the shell".
-            extern long sys_signal(int signum, void (*handler)());
             // We don't have a real U-mode handler here, but we can't easily 
             // register one from S-mode that runs in U-mode unless we have a U-mode address.
             printf("signal command is usually for user shell.\r\n");
         } else if (strncmp(buffer, "kill ", 5) == 0) {
             int target_pid = my_atoi(buffer + 5);
-            extern int sys_kill(int pid, int signum);
             if (sys_kill(target_pid, 15) == 0) {
                 printf("Sent SIGTERM to PID %d\r\n", target_pid);
             } else {

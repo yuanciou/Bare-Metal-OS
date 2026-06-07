@@ -1,5 +1,6 @@
 #include "exception.h"
 #include "thread.h"
+#include "vfs.h"
 #include "../lib/stdio.h"
 #include "../lib/string.h"
 #include "../lib/cpio.h"
@@ -344,6 +345,13 @@ long sys_fork(struct pt_regs *parent_regs) {
     // Clone VMAs
     child->vmas = copy_vma_list(parent->vmas);
 
+    // Increment ref_count for open files
+    for (int i = 0; i < 16; i++) {
+        if (child->fdt[i]) {
+            child->fdt[i]->ref_count++;
+        }
+    }
+
     // Calculate register offsets for kernel stack
     unsigned long kstack_offset = child->kernel_stack - parent->kernel_stack;
     struct pt_regs *child_regs = (struct pt_regs *)((unsigned long)parent_regs + kstack_offset);
@@ -408,6 +416,13 @@ long sys_waitpid(long pid) {
  * @brief 6: Terminate the current process.
  */
 void sys_exit(int status) {
+    thread *current = get_cur_thread();
+    for (int i = 0; i < 16; i++) {
+        if (current->fdt[i]) {
+            vfs_close(current->fdt[i]);
+            current->fdt[i] = NULL;
+        }
+    }
     thread_exit();
 }
 
@@ -628,12 +643,146 @@ void *sys_mmap(void *addr, unsigned long length, int prot, int flags) {
     return (void *)start;
 }
 
+// ======================================================================
+//                               VFS Syscalls
+// ======================================================================
+
+int sys_open(const char *pathname, int flags) {
+    thread *current = get_cur_thread();
+    
+    // Enable SUM to access path from user space and disable interrupts
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    unsigned long new_sstatus = (saved_sstatus | (1UL << 18)) & ~(1UL << 1);
+    asm volatile("csrw sstatus, %0" : : "r"(new_sstatus));
+    
+    struct file *f;
+    int res = vfs_open(pathname, flags, &f);
+    
+    // Restore sstatus
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+    
+    if (res != 0) return -1;
+    
+    // Find empty FD
+    for (int i = 0; i < 16; i++) {
+        if (current->fdt[i] == NULL) {
+            current->fdt[i] = f;
+            return i;
+        }
+    }
+    
+    vfs_close(f);
+    return -1;
+}
+
+int sys_close(int fd) {
+    if (fd < 0 || fd >= 16) return -1;
+    thread *current = get_cur_thread();
+    if (current->fdt[fd] == NULL) return -1;
+    
+    vfs_close(current->fdt[fd]);
+    current->fdt[fd] = NULL;
+    return 0;
+}
+
+long sys_read(int fd, void *buf, unsigned long count) {
+    if (fd < 0 || fd >= 16) return -1;
+    thread *current = get_cur_thread();
+    if (current->fdt[fd] == NULL) return -1;
+    
+    // Enable SUM to access buf from user space and disable interrupts
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    unsigned long new_sstatus = (saved_sstatus | (1UL << 18)) & ~(1UL << 1);
+    asm volatile("csrw sstatus, %0" : : "r"(new_sstatus));
+    
+    long res = vfs_read(current->fdt[fd], buf, count);
+    
+    // Restore sstatus
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+    
+    return res;
+}
+
+long sys_write(int fd, const void *buf, unsigned long count) {
+    if (fd < 0 || fd >= 16) return -1;
+    thread *current = get_cur_thread();
+    if (current->fdt[fd] == NULL) return -1;
+    
+    // Enable SUM to access buf from user space and disable interrupts
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    unsigned long new_sstatus = (saved_sstatus | (1UL << 18)) & ~(1UL << 1);
+    asm volatile("csrw sstatus, %0" : : "r"(new_sstatus));
+    
+    long res = vfs_write(current->fdt[fd], buf, count);
+    
+    // Restore sstatus
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+    
+    return res;
+}
+
+int sys_mkdir(const char *pathname, unsigned mode) {
+    // Enable SUM to access path from user space and disable interrupts
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    unsigned long new_sstatus = (saved_sstatus | (1UL << 18)) & ~(1UL << 1);
+    asm volatile("csrw sstatus, %0" : : "r"(new_sstatus));
+    
+    int res = vfs_mkdir(pathname);
+    
+    // Restore sstatus
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+    
+    return res;
+}
+
+int sys_mount(const char *src, const char *target, const char *filesystem, unsigned long flags, const void *data) {
+    // Enable SUM and disable interrupts
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    unsigned long new_sstatus = (saved_sstatus | (1UL << 18)) & ~(1UL << 1);
+    asm volatile("csrw sstatus, %0" : : "r"(new_sstatus));
+    
+    int res = vfs_mount(target, filesystem);
+    
+    // Restore sstatus
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+    
+    return res;
+}
+
+int sys_chdir(const char *path) {
+    thread *current = get_cur_thread();
+    
+    // Enable SUM and disable interrupts
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    unsigned long new_sstatus = (saved_sstatus | (1UL << 18)) & ~(1UL << 1);
+    asm volatile("csrw sstatus, %0" : : "r"(new_sstatus));
+    
+    struct vnode *node;
+    int res = vfs_lookup(path, &node);
+    
+    // Restore sstatus
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+    
+    if (res == 0) {
+        current->cwd = node;
+        return 0;
+    }
+    return -1;
+}
+
 void handle_syscall(struct pt_regs *regs) {
     unsigned long syscall_num = regs->a7;
     unsigned long arg0 = regs->a0;
     unsigned long arg1 = regs->a1;
     unsigned long arg2 = regs->a2;
     unsigned long arg3 = regs->a3;
+    unsigned long arg4 = regs->a4;
 
     long ret = -1;
 
@@ -680,6 +829,27 @@ void handle_syscall(struct pt_regs *regs) {
             break;
         case 13:
             ret = (long)sys_mmap((void *)arg0, arg1, (int)arg2, (int)arg3);
+            break;
+        case 14:
+            ret = sys_open((const char *)arg0, (int)arg1);
+            break;
+        case 15:
+            ret = sys_close((int)arg0);
+            break;
+        case 16:
+            ret = sys_read((int)arg0, (void *)arg1, arg2);
+            break;
+        case 17:
+            ret = sys_write((int)arg0, (const void *)arg1, arg2);
+            break;
+        case 18:
+            ret = sys_mkdir((const char *)arg0, (unsigned int)arg1);
+            break;
+        case 19:
+            ret = sys_mount((const char *)arg0, (const char *)arg1, (const char *)arg2, arg3, (const void *)arg4);
+            break;
+        case 20:
+            ret = sys_chdir((const char *)arg0);
             break;
         default:
             printf("Unknown syscall number: %ld\r\n", syscall_num);

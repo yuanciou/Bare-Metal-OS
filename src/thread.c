@@ -191,6 +191,14 @@ void kill_zombies(void) {
             
             curr = to_free->next;
             
+            // Close FDs
+            for (int i = 0; i < 16; i++) {
+                if (to_free->fdt[i]) {
+                    vfs_close(to_free->fdt[i]);
+                    to_free->fdt[i] = NULL;
+                }
+            }
+
             // free the kernel stack, user stack and the thread struct itself
             if (to_free->kernel_stack) {
                 free((void*)to_free->kernel_stack);
@@ -287,6 +295,17 @@ thread* thread_create(void (*threadfn)()) {
     t->sigpending = 0;
     t->is_handling_signal = 0;
     t->signal_stack_page = 0;
+
+    // VFS initialization
+    thread* current_t = get_cur_thread();
+    if (current_t) {
+        t->cwd = current_t->cwd;
+        t->root = current_t->root;
+    } else {
+        t->cwd = rootfs ? rootfs->root : NULL;
+        t->root = rootfs ? rootfs->root : NULL;
+    }
+    for (int i = 0; i < 16; i++) t->fdt[i] = NULL;
 
     // Setup initial context to use the wrapper
     t->context.ra = (unsigned long)kernel_thread_wrapper;
