@@ -99,7 +99,7 @@ static void vfs_test() {
 
     printf("--- VFS Test Start ---\r\n");
 
-    // 1. Create and write to a file
+    // 1. Create and write to a file in root
     res = vfs_open("/test_file", O_CREAT, &a);
     if (res != 0) { printf("vfs_open failed\r\n"); return; }
     printf("Created /test_file\r\n");
@@ -133,6 +133,43 @@ static void vfs_test() {
     vfs_read(b, buf, 14);
     printf("Read from /dir1/nested: '%s'\r\n", buf);
     vfs_close(b);
+
+    // 5. Mounting test
+    vfs_mkdir("/mnt");
+    res = vfs_mount("/mnt", "tmpfs");
+    if (res != 0) { printf("vfs_mount failed\r\n"); return; }
+    printf("Mounted tmpfs on /mnt\r\n");
+
+    // Create a file in the newly mounted filesystem
+    res = vfs_open("/mnt/mount_test", O_CREAT, &a);
+    if (res != 0) { printf("vfs_open /mnt/mount_test failed\r\n"); return; }
+    vfs_write(a, "Cross Mount!", 12);
+    vfs_close(a);
+
+    // Verify lookup crosses mount point correctly
+    res = vfs_open("/mnt/mount_test", 0, &a);
+    if (res != 0) { printf("vfs_open (read) /mnt/mount_test failed\r\n"); return; }
+    memset(buf, 0, sizeof(buf));
+    vfs_read(a, buf, 12);
+    printf("Read from /mnt/mount_test: '%s'\r\n", buf);
+    vfs_close(a);
+
+    // 6. Path robustness test (multiple slashes and trailing slashes)
+    res = vfs_open("//dir1///nested", 0, &a);
+    if (res == 0) {
+        printf("Success: //dir1///nested resolved correctly\r\n");
+        vfs_close(a);
+    } else {
+        printf("Fail: //dir1///nested resolution failed\r\n");
+    }
+
+    res = vfs_open("/dir1/", 0, &a);
+    if (res == 0) {
+        printf("Success: /dir1/ resolved correctly\r\n");
+        vfs_close(a);
+    } else {
+        printf("Fail: /dir1/ resolution failed\r\n");
+    }
 
     printf("--- VFS Test End ---\r\n");
 }

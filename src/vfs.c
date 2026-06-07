@@ -28,35 +28,50 @@ int register_filesystem(struct filesystem* fs) {
     return -1;
 }
 
+static void get_parent_and_child(const char* pathname, char* dirname, char* childname) {
+    int len = strlen(pathname);
+    char temp[PATH_MAX];
+    strncpy(temp, pathname, PATH_MAX - 1);
+    temp[PATH_MAX - 1] = '\0';
+
+    // Strip trailing slashes
+    while (len > 1 && temp[len - 1] == '/') {
+        temp[len - 1] = '\0';
+        len--;
+    }
+
+    int last_slash = -1;
+    for (int i = 0; temp[i] != '\0'; i++) {
+        if (temp[i] == '/') last_slash = i;
+    }
+
+    if (last_slash == -1) {
+        // Relative path without slash (treat as in / for now)
+        dirname[0] = '/';
+        dirname[1] = '\0';
+        strcpy(childname, temp);
+    } else if (last_slash == 0) {
+        // Path like /file
+        dirname[0] = '/';
+        dirname[1] = '\0';
+        strcpy(childname, temp + 1);
+    } else {
+        // Path like /dir/file
+        strncpy(dirname, temp, last_slash);
+        dirname[last_slash] = '\0';
+        strcpy(childname, temp + last_slash + 1);
+    }
+}
+
 int vfs_open(const char* pathname, int flags, struct file** target) {
     struct vnode* vnode;
     int res = vfs_lookup(pathname, &vnode);
     
     if (res != 0) {
         if (flags & O_CREAT) {
-            // Find parent directory
-            int last_slash = -1;
-            for (int i = 0; pathname[i] != '\0'; i++) {
-                if (pathname[i] == '/') last_slash = i;
-            }
-            
             char dirname[PATH_MAX];
-            const char* filename;
-            
-            if (last_slash == -1) {
-                // Relative to root or current dir (assume / for now)
-                dirname[0] = '/';
-                dirname[1] = '\0';
-                filename = pathname;
-            } else if (last_slash == 0) {
-                dirname[0] = '/';
-                dirname[1] = '\0';
-                filename = pathname + 1;
-            } else {
-                strncpy(dirname, pathname, last_slash);
-                dirname[last_slash] = '\0';
-                filename = pathname + last_slash + 1;
-            }
+            char filename[PATH_MAX];
+            get_parent_and_child(pathname, dirname, filename);
             
             struct vnode* dir_vnode;
             if (vfs_lookup(dirname, &dir_vnode) != 0) {
@@ -97,6 +112,7 @@ int vfs_write(struct file* file, const void* buf, size_t len) {
 int vfs_lookup(const char* pathname, struct vnode** target) {
     if (rootfs == NULL) return -1;
     
+    // Handle root path
     if (strcmp(pathname, "/") == 0 || strlen(pathname) == 0) {
         *target = rootfs->root;
         return 0;
@@ -104,12 +120,15 @@ int vfs_lookup(const char* pathname, struct vnode** target) {
 
     struct vnode* node = rootfs->root;
     char component[PATH_MAX];
-    int start = 0;
-    if (pathname[0] == '/') start = 1;
+    int i = 0;
+    if (pathname[0] == '/') i = 1;
 
-    int i = start;
     while (pathname[i] != '\0') {
         int j = 0;
+        // Skip consecutive slashes
+        while (pathname[i] == '/') i++;
+        if (pathname[i] == '\0') break;
+
         while (pathname[i] != '/' && pathname[i] != '\0') {
             component[j++] = pathname[i++];
         }
@@ -119,12 +138,11 @@ int vfs_lookup(const char* pathname, struct vnode** target) {
             if (node->v_ops->lookup(node, &node, component) != 0) {
                 return -1;
             }
+            // Cross mount point
             while (node->mount) {
                 node = node->mount->root;
             }
         }
-        
-        if (pathname[i] == '/') i++;
     }
 
     *target = node;
@@ -132,29 +150,9 @@ int vfs_lookup(const char* pathname, struct vnode** target) {
 }
 
 int vfs_mkdir(const char* pathname) {
-    // Basic implementation for mkdir
-    // For now, just handle the same logic as O_CREAT but call mkdir
-    int last_slash = -1;
-    for (int i = 0; pathname[i] != '\0'; i++) {
-        if (pathname[i] == '/') last_slash = i;
-    }
-    
     char dirname[PATH_MAX];
-    const char* filename;
-    
-    if (last_slash == -1) {
-        dirname[0] = '/';
-        dirname[1] = '\0';
-        filename = pathname;
-    } else if (last_slash == 0) {
-        dirname[0] = '/';
-        dirname[1] = '\0';
-        filename = pathname + 1;
-    } else {
-        strncpy(dirname, pathname, last_slash);
-        dirname[last_slash] = '\0';
-        filename = pathname + last_slash + 1;
-    }
+    char filename[PATH_MAX];
+    get_parent_and_child(pathname, dirname, filename);
     
     struct vnode* dir_vnode;
     if (vfs_lookup(dirname, &dir_vnode) != 0) {
@@ -166,7 +164,6 @@ int vfs_mkdir(const char* pathname) {
 }
 
 int vfs_mount(const char* target, const char* filesystem) {
-    // Find filesystem
     struct filesystem* fs = NULL;
     for (int i = 0; i < MAX_FS; i++) {
         if (fs_list[i].name && strcmp(fs_list[i].name, filesystem) == 0) {

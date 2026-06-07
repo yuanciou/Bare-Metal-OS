@@ -1,6 +1,6 @@
 #include "vfs.h"
 
-#define TMPFS_MAX_FILE_NAME 15
+#define TMPFS_MAX_FILE_NAME 16
 #define TMPFS_MAX_DIR_ENTRY 16
 #define TMPFS_MAX_FILE_SIZE 4096
 
@@ -127,6 +127,7 @@ int tmpfs_create(struct vnode* dir_node,
     struct vnode* new_vnode = tmpfs_create_vnode(FS_FILE);
     struct tmpfs_vnode* new_internal = new_vnode->internal;
     strncpy(new_internal->name, component_name, TMPFS_MAX_FILE_NAME - 1);
+    new_internal->name[TMPFS_MAX_FILE_NAME - 1] = '\0';
 
     for (int i = 0; i < TMPFS_MAX_DIR_ENTRY; i++) {
         if (dir_internal->entry[i] == NULL) {
@@ -136,7 +137,6 @@ int tmpfs_create(struct vnode* dir_node,
         }
     }
     // No space in directory
-    // Clean up
     free(new_internal);
     free(new_vnode);
     return -1;
@@ -151,6 +151,7 @@ int tmpfs_mkdir(struct vnode* dir_node,
     struct vnode* new_vnode = tmpfs_create_vnode(FS_DIR);
     struct tmpfs_vnode* new_internal = new_vnode->internal;
     strncpy(new_internal->name, component_name, TMPFS_MAX_FILE_NAME - 1);
+    new_internal->name[TMPFS_MAX_FILE_NAME - 1] = '\0';
 
     for (int i = 0; i < TMPFS_MAX_DIR_ENTRY; i++) {
         if (dir_internal->entry[i] == NULL) {
