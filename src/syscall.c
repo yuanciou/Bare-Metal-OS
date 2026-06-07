@@ -130,6 +130,9 @@ Restore the original user context after a signal handler returns. This syscall i
 
 12: int kill(int pid, int signum)
 Send a signal to the process identified by pid. If the process has a registered handler for the signal, the handler is executed. Otherwise, the process is terminated by default. Return 0 on success, -1 on failure.
+
+13: void* mmap(void *addr, unsigned long length, int prot, int flags)
+Create memory regions for a user process.
 */
 // ======================================================================
 
