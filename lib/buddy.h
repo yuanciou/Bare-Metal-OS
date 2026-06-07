@@ -24,6 +24,7 @@ struct frame {
     struct list_head node;
     signed char meta_pool_idx;  // the pool idx (map by `g_pools[meta_pool_idx].chunk_size`)
     int ref_count;              // the count of allocated chunks
+    int cow_ref_count;          // reference count for Copy-on-Write
 };
 
 extern struct frame *frame_array;

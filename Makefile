@@ -11,9 +11,13 @@ CFLAGS = -mcmodel=medany -fno-pie -ffreestanding -nostdlib -g -Wall -march=rv64g
 
 # ----------------------------------------------------
 # 根據下達的指令，自動加上對應的 CFLAGS (取代原本的 ifeq)
+# LDFLAGS: flags for linker
+# --defsym -> Define Symbols
 # ----------------------------------------------------
 qemu: CFLAGS += -DQEMU
+qemu: LDFLAGS += --defsym=LOAD_ADDR=0x80200000
 orangepi: CFLAGS += -DORANGE_PI
+orangepi: LDFLAGS += --defsym=LOAD_ADDR=0x00200000
 
 # ----------------------------------------------------
 # 定義具體的執行目標 (Targets)
@@ -26,6 +30,7 @@ all: qemu
 qemu: clean build_common
 	$(OBJCOPY) -O binary $(TARGET).elf $(TARGET).bin
 	$(QEMU) -M virt -m 256M -kernel $(TARGET).bin -initrd initramfs.cpio -device ramfb -serial stdio
+#	$(QEMU) -M virt -m 256M -kernel $(TARGET).bin -initrd initramfs.cpio -device ramfb -nographic
 
 # 執行 `make orangepi` 會做的事：清空 -> 編譯 -> 轉 bin -> 產生 fit 映像檔
 orangepi: clean build_common
@@ -39,7 +44,7 @@ build_common:
 	# 使用 wildcard 自動抓取根目錄與 lib 目錄下的所有 .c 與 .S 檔
 	$(CC) $(CFLAGS) -c $(wildcard *.c *.S src/*.c src/*.S lib/*.c lib/*.S)
 	# gcc -c 會將所有編譯出來的 .o 檔放在「當前目錄」，所以可以直接 *.o 連結
-	$(LD) -T src/link.ld -o $(TARGET).elf *.o
+	$(LD) $(LDFLAGS) -T src/link.ld -o $(TARGET).elf *.o
 
 clean:
 	rm -f $(TARGET) $(TARGET).elf $(TARGET).bin $(TARGET).fit *.o

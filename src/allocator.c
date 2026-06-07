@@ -10,6 +10,7 @@
 #include "../lib/stdio.h"
 #include "../lib/string.h"
 #include "config.h"
+#include "mmu.h"
 
 extern char _start;
 extern char _end;
@@ -160,7 +161,10 @@ static void reserve_all_memory(const void *fdt) {
         // Reserve initramfs
             // from the /chosen node in FDT
         initrd_start = get_initrd_start(fdt);
+        if (initrd_start != 0 && initrd_start < PAGE_OFFSET) initrd_start += PAGE_OFFSET;
         initrd_end = get_initrd_end(fdt);
+        if (initrd_end != 0 && initrd_end < PAGE_OFFSET) initrd_end += PAGE_OFFSET;
+
         if (initrd_start && initrd_end > initrd_start) {
             ALLOC_LOG("Reserve initramfs:\r\n");
             memory_reserve(initrd_start, initrd_end - initrd_start);
@@ -171,6 +175,7 @@ static void reserve_all_memory(const void *fdt) {
             // from all region in `reserved-memory` node in FDT
         idx = 0;  // idx++ to avoid always return the first region in `reserved-memory` node
         while (fdt_get_reserved_memory_region(fdt, idx, &start, &size) == 0) {
+            if (start < PAGE_OFFSET) start += PAGE_OFFSET;
             ALLOC_LOG("Reserve reserved memory %d:\r\n", idx);
             memory_reserve(start, size);
             ALLOC_LOG("----------------------------\r\n");
@@ -253,6 +258,12 @@ void *startup_alloc(const void *fdt) {
                 }
             }
         }
+    }
+
+    // Convert physical start address to virtual
+    // (Assuming physical addresses are within the first 128GB or so)
+    if (pool_start < PAGE_OFFSET) {
+        pool_start += PAGE_OFFSET;
     }
 
     // set `G_MEMPOOL_START`, `G_MEMPOOL_SIZE` and `G_MEM_TOTAL_PAGE`
@@ -492,6 +503,27 @@ void free(void *ptr) {
             return;
         }
 
-        buddy_free_pages(ptr);
+        frame_array[page_idx].cow_ref_count--;
+        if (frame_array[page_idx].cow_ref_count == 0) {
+            buddy_free_pages(ptr);
+        }
     }
+}
+
+void page_inc_ref(void *ptr) {
+    unsigned long addr = (unsigned long)ptr;
+    if (!(G_MEMPOOL_SIZE != 0 && addr >= G_MEMPOOL_START && addr < G_MEMPOOL_START + G_MEMPOOL_SIZE)) {
+        return;
+    }
+    unsigned long page_idx = addr_to_page_idx(addr);
+    frame_array[page_idx].cow_ref_count++;
+}
+
+int get_page_ref(void *ptr) {
+    unsigned long addr = (unsigned long)ptr;
+    if (!(G_MEMPOOL_SIZE != 0 && addr >= G_MEMPOOL_START && addr < G_MEMPOOL_START + G_MEMPOOL_SIZE)) {
+        return 0;
+    }
+    unsigned long page_idx = addr_to_page_idx(addr);
+    return frame_array[page_idx].cow_ref_count;
 }

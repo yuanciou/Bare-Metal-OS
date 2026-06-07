@@ -1,10 +1,11 @@
 #include "video.h"
+#include "mmu.h"
 #include "../lib/stdio.h"
 #include "../lib/string.h"
 #include <stdint.h>
 
 #ifdef QEMU
-#define FB_BASE   0x87000000
+#define FB_BASE   (0x87000000UL + PAGE_OFFSET)
 #define FB_WIDTH  1920
 #define FB_HEIGHT 1080
 #define FB_BPP    4
@@ -38,7 +39,7 @@ struct QEMU_PACKED RAMFBCfg {
     uint32_t stride;
 };
 
-#define FW_CFG_BASE   0x10100000UL
+#define FW_CFG_BASE   (0x10100000UL + PAGE_OFFSET)
 #define FW_CFG_SELECT (uint16_t*)(FW_CFG_BASE + 0x08)
 #define FW_CFG_DATA   (uint64_t*)(FW_CFG_BASE + 0x00)
 #define FW_CFG_DMA    (uint64_t*)(FW_CFG_BASE + 0x10)
@@ -73,9 +74,9 @@ static void fw_cfg_dma_transfer(void* address, uint32_t length, uint32_t control
     struct FWCfgDmaAccess access = {
         .control = bswap32(control),
         .length = bswap32(length),
-        .address = bswap64((uint64_t)address),
+        .address = bswap64((uint64_t)address & ~PAGE_OFFSET), // since DMA address should be physical
     };
-    *FW_CFG_DMA = bswap64((uint64_t)&access);
+    *FW_CFG_DMA = bswap64((uint64_t)&access & ~PAGE_OFFSET); // since DMA address should be physical
     while (bswap32(access.control) & ~FW_CFG_DMA_CTL_ERROR);
 }
 
@@ -104,7 +105,7 @@ static int fw_cfg_find_file(const char* name) {
 #endif
 
 #ifdef ORANGE_PI
-#define FB_BASE   0x7f700000
+#define FB_BASE   (0x7f700000UL + PAGE_OFFSET)
 #define FB_WIDTH  1920
 #define FB_HEIGHT 1080
 #define FB_BPP    4
@@ -153,7 +154,7 @@ static void flush_dcache(void* addr, unsigned long len) {
 void video_init() {
 #ifdef QEMU
     struct RAMFBCfg cfg = {
-        .addr = bswap64(FB_BASE),
+        .addr = bswap64(FB_BASE & ~PAGE_OFFSET), // since DMA address should be physical
         .fourcc = bswap32(XRGB8888),
         .flags = bswap32(0),
         .width = bswap32(FB_WIDTH),

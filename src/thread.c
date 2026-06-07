@@ -4,6 +4,7 @@
 #include "allocator.h"
 #include "exception.h"
 #include "timer.h"
+#include "mmu.h"
 
 // ============================================
 //                    Utils
@@ -44,7 +45,9 @@ thread* get_cur_thread(void) {
  */
 static void thread_wakeup_callback(void* arg) {
     thread* t = (thread*)arg;
-    t->status = THREAD_READY;
+    if (t->status == THREAD_WAITING) {
+        t->status = THREAD_READY;
+    }
 }
 
 /**
@@ -126,6 +129,19 @@ void schedule(void) {
 
     // if the candidate thread is not as same as the current -> switch to it
     if (prev != next) {
+        // Switch address space if necessary (user has its PGD, kernel is NULL)
+        unsigned long* next_pgd = next->pgd ? next->pgd : kernel_pgd;
+        unsigned long* prev_pgd = prev->pgd ? prev->pgd : kernel_pgd;
+
+        if (next_pgd != prev_pgd) {
+            // if the PGD is different, switch the address space by writing to satp and flushing the TLB with sfence.vma
+            unsigned long satp_val = MAKE_SATP((unsigned long)next_pgd - PAGE_OFFSET);
+            asm volatile(
+                "csrw satp, %0\n"
+                "sfence.vma zero, zero\n"
+                : : "r"(satp_val) : "memory"
+            );
+        }
         switch_to(prev, next);
     }
 
@@ -182,6 +198,20 @@ void kill_zombies(void) {
             if (to_free->user_stack) {
                 free((void*)to_free->user_stack);
             }
+
+            // free the PGD if it's not the kernel PGD (shared by all threads without user space)
+            if (to_free->pgd && to_free->pgd != kernel_pgd) {
+                free_pgd(to_free->pgd);
+            }
+
+            // Free VMAs
+            vm_area *vma = to_free->vmas;
+            while (vma) {
+                vm_area *next = vma->next;
+                free(vma);
+                vma = next;
+            }
+
             free(to_free);
             
             if (run_queue == NULL) break;
@@ -250,6 +280,7 @@ thread* thread_create(void (*threadfn)()) {
     t->current_task_priority = -1;
     t->arg = NULL;
     t->entry_func = threadfn;
+    t->pgd = kernel_pgd;
 
     // Initialize signal fields
     for (int i = 0; i < 32; i++) t->signal_handler[i] = 0;

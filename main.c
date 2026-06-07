@@ -12,6 +12,7 @@
 #include "src/task.h"
 #include "src/thread.h"
 #include "src/video.h"
+#include "src/mmu.h"
 
 struct timeout_args {
     char *message;
@@ -60,6 +61,7 @@ void user_program_loader(void) {
     if (cur) filename = cur->arg;
 
     unsigned long initrd_start = get_initrd_start(kernel_fdt);
+    if (initrd_start != 0 && initrd_start < PAGE_OFFSET) initrd_start += PAGE_OFFSET;
 
     if (!filename) {
         printf("No program specified for exec wrapper\r\n");
@@ -94,6 +96,7 @@ void run_shell(unsigned long hartid, const void *fdt) {
 
     // Get initrd address from FDT
     unsigned long initrd_start = get_initrd_start(fdt);
+    if (initrd_start != 0 && initrd_start < PAGE_OFFSET) initrd_start += PAGE_OFFSET;
 
     while (1) {
         printf("\r\n# ");
@@ -250,12 +253,24 @@ void run_shell(unsigned long hartid, const void *fdt) {
 void start_kernel(unsigned long hartid, const void *fdt) {
     // init uart base to enable printf
     init_uart_from_fdt(fdt);
+    if (uart_base_addr < PAGE_OFFSET) uart_base_addr += PAGE_OFFSET;
     
+    unsigned long pc;
+    asm volatile("auipc %0, 0" : "=r"(pc));
+    printf("Kernel is now running in virtual memory at PC: 0x%lx\r\n", pc);
+
     // Memory Allocator
     allocator_init(fdt);
-    
-    // PLIC Init open UART IRQ Handler
+
+    // PLIC Init
     plic_init(hartid, fdt);
+    extern unsigned long plic_base;
+    if (plic_base != 0 && plic_base < PAGE_OFFSET) plic_base += PAGE_OFFSET;
+
+    // Refine MMU with finer granularity
+    mmu_init();
+    
+    // Open UART IRQ Handler
     int uart_irq = uart_get_irq(fdt);
     plic_enable_interrupt(uart_irq);
 

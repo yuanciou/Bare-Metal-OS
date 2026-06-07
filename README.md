@@ -46,6 +46,8 @@ make qemu
 │   ├── exception.h
 │   ├── kernel.its
 │   ├── link.ld
+│   ├── mmu.c               // virtual memory control 
+│   ├── mmu.h
 │   ├── plic.c              // the PLIC part of 
 │   ├── plic.h
 │   ├── start.S
@@ -54,6 +56,8 @@ make qemu
 │   ├── task.c              // handle the add_task() and run_task()
 │   ├── task.h
 │   ├── thread_switch.S     // handle the thread switch (callee save)
+│   ├── thread.c            // thread control
+│   ├── thread.h
 │   ├── timer.c             // add_timer() and handle_timer_interrupt()
 │   ├── timer.h
 │   ├── trampoline.S        // the tramploline for POSIX signal
@@ -97,3 +101,8 @@ make qemu
   - thread structure and scheduler (context switch)
   - implement syscall (detail in `src/syscall.c`)
   - implement video player
+- Virtual Memory
+  - RISC-V Sv39 virtual memory in kernel/user space
+  - mmap syscall
+  - page fault handler & demand paging
+  - copy on write
