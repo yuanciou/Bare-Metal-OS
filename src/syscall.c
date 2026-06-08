@@ -724,6 +724,33 @@ long sys_write(int fd, const void *buf, unsigned long count) {
     return res;
 }
 
+long sys_lseek64(int fd, long offset, int whence) {
+    if (fd < 0 || fd >= 16) return -1;
+    thread *current = get_cur_thread();
+    if (current->fdt[fd] == NULL) return -1;
+    
+    return vfs_lseek64(current->fdt[fd], offset, whence);
+}
+
+int sys_ioctl(int fd, unsigned long request, void *arg) {
+    if (fd < 0 || fd >= 16) return -1;
+    thread *current = get_cur_thread();
+    if (current->fdt[fd] == NULL) return -1;
+    
+    // Enable SUM to access arg from user space and disable interrupts
+    unsigned long saved_sstatus;
+    asm volatile("csrr %0, sstatus" : "=r"(saved_sstatus));
+    unsigned long new_sstatus = (saved_sstatus | (1UL << 18)) & ~(1UL << 1);
+    asm volatile("csrw sstatus, %0" : : "r"(new_sstatus));
+    
+    int res = vfs_ioctl(current->fdt[fd], request, arg);
+    
+    // Restore sstatus
+    asm volatile("csrw sstatus, %0" : : "r"(saved_sstatus));
+    
+    return res;
+}
+
 int sys_mkdir(const char *pathname, unsigned mode) {
     // Enable SUM to access path from user space and disable interrupts
     unsigned long saved_sstatus;
@@ -850,6 +877,12 @@ void handle_syscall(struct pt_regs *regs) {
             break;
         case 20:
             ret = sys_chdir((const char *)arg0);
+            break;
+        case 21:
+            ret = sys_lseek64((int)arg0, (long)arg1, (int)arg2);
+            break;
+        case 22:
+            ret = (long)sys_ioctl((int)arg0, (unsigned long)arg1, (void *)arg2);
             break;
         default:
             printf("Unknown syscall number: %ld\r\n", syscall_num);

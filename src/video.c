@@ -171,6 +171,20 @@ void video_init() {
     // Orange Pi needs no initialization as per TODO.md
 }
 
+void video_get_info(struct framebuffer_info* info) {
+    info->width = FB_WIDTH;
+    info->height = FB_HEIGHT;
+    info->bpp = FB_BPP;
+}
+
+void video_flush(void* addr, unsigned long len) {
+    flush_dcache(addr, len);
+}
+
+void* video_get_base(void) {
+    return (void*)FB_BASE;
+}
+
 /**
  * @brief Display the BMP image on the screen by copying the image data to the framebuffer row by row.
  *        call flush_dcache after copying each row to ensure the data is written to DRAM and visible to HDMI controller.

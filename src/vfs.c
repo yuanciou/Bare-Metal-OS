@@ -141,6 +141,20 @@ int vfs_write(struct file* file, const void* buf, size_t len) {
     return file->f_ops->write(file, buf, len);
 }
 
+long vfs_lseek64(struct file* file, long offset, int whence) {
+    if (file->f_ops->lseek64) {
+        return file->f_ops->lseek64(file, offset, whence);
+    }
+    return -1;
+}
+
+int vfs_ioctl(struct file* file, unsigned long request, void* arg) {
+    if (file->f_ops->ioctl) {
+        return file->f_ops->ioctl(file, request, arg);
+    }
+    return -1;
+}
+
 int vfs_lookup(const char* pathname, struct vnode** target) {
     if (rootfs == NULL) return -1;
     
