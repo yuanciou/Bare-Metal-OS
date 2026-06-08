@@ -53,6 +53,11 @@ static volatile int completed_foo = 0;
 void run_shell(unsigned long hartid, const void *fdt);
 
 void shell_thread(void) {
+    // Open stdin, stdout, stderr
+    sys_open("/dev/uart", 0); // fd 0
+    sys_open("/dev/uart", 0); // fd 1
+    sys_open("/dev/uart", 0); // fd 2
+
     printf("\r\nStarting Shell (PID: %d)...\r\n", get_cur_thread()->pid);
     run_shell(kernel_hartid, kernel_fdt);
 }

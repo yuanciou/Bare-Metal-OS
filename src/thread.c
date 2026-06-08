@@ -301,11 +301,15 @@ thread* thread_create(void (*threadfn)()) {
     if (current_t) {
         t->cwd = current_t->cwd;
         t->root = current_t->root;
+        for (int i = 0; i < 16; i++) {
+            t->fdt[i] = current_t->fdt[i];
+            if (t->fdt[i]) t->fdt[i]->ref_count++;
+        }
     } else {
         t->cwd = rootfs ? rootfs->root : NULL;
         t->root = rootfs ? rootfs->root : NULL;
+        for (int i = 0; i < 16; i++) t->fdt[i] = NULL;
     }
-    for (int i = 0; i < 16; i++) t->fdt[i] = NULL;
 
     // Setup initial context to use the wrapper
     t->context.ra = (unsigned long)kernel_thread_wrapper;

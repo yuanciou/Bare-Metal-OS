@@ -20,6 +20,11 @@ void vfs_init() {
     ramfs->setup_mount = ramfs_setup_mount;
     register_filesystem(ramfs);
 
+    struct filesystem* devfs = allocate(sizeof(struct filesystem));
+    devfs->name = "devfs";
+    devfs->setup_mount = devfs_setup_mount;
+    register_filesystem(devfs);
+
     rootfs = allocate(sizeof(struct mount));
     tmpfs->setup_mount(tmpfs, rootfs);
     rootfs->root->parent = rootfs->root; // Root's parent is itself
@@ -34,6 +39,10 @@ void vfs_init() {
     // Create /ramfs and mount ramfs
     vfs_mkdir("/ramfs");
     vfs_mount("/ramfs", "ramfs");
+
+    // Create /dev and mount devfs
+    vfs_mkdir("/dev");
+    vfs_mount("/dev", "devfs");
 }
 
 int register_filesystem(struct filesystem* fs) {

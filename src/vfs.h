@@ -66,4 +66,7 @@ int vfs_lookup(const char* pathname, struct vnode** target);
 // tmpfs
 int tmpfs_setup_mount(struct filesystem* fs, struct mount* mount);
 
+// devfs
+int devfs_setup_mount(struct filesystem* fs, struct mount* mount);
+
 #endif // VFS_H
