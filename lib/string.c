@@ -59,3 +59,49 @@ void *memcpy(void *dest, const void *src, size_t n) {
     }
     return dest;
 }
+
+char *strtok_r(char *str, const char *delim, char **saveptr) {
+    char *token;
+    if (str == NULL) {
+        str = *saveptr;
+    }
+    if (str == NULL || *str == '\0') {
+        *saveptr = NULL;
+        return NULL;
+    }
+
+    // Skip leading delimiters
+    while (*str != '\0') {
+        const char *d = delim;
+        while (*d != '\0' && *d != *str) d++;
+        if (*d == '\0') break;
+        str++;
+    }
+
+    if (*str == '\0') {
+        *saveptr = NULL;
+        return NULL;
+    }
+
+    token = str;
+    // Find end of token
+    while (*str != '\0') {
+        const char *d = delim;
+        while (*d != '\0' && *d != *str) d++;
+        if (*d != '\0') break;
+        str++;
+    }
+
+    if (*str != '\0') {
+        *str = '\0';
+        *saveptr = str + 1;
+    } else {
+        *saveptr = NULL;
+    }
+    return token;
+}
+
+static char *__strtok_saveptr;
+char *strtok(char *str, const char *delim) {
+    return strtok_r(str, delim, &__strtok_saveptr);
+}

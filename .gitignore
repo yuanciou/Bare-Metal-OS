@@ -3,7 +3,5 @@
 *.elf
 *.bin
 *.fit
-TODO.md
-ex71/*
-ex72/*
 rootfs/*
+TODO.md

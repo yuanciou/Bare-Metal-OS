@@ -1,5 +1,6 @@
 #include "vfs.h"
 #include "thread.h"
+#include "ramfs.h"
 
 #define MAX_FS   16
 #define MAX_FD   16
@@ -14,6 +15,11 @@ void vfs_init() {
     tmpfs->setup_mount = tmpfs_setup_mount;
     register_filesystem(tmpfs);
     
+    struct filesystem* ramfs = allocate(sizeof(struct filesystem));
+    ramfs->name = "ramfs";
+    ramfs->setup_mount = ramfs_setup_mount;
+    register_filesystem(ramfs);
+
     rootfs = allocate(sizeof(struct mount));
     tmpfs->setup_mount(tmpfs, rootfs);
     rootfs->root->parent = rootfs->root; // Root's parent is itself
@@ -24,6 +30,10 @@ void vfs_init() {
         current->cwd = rootfs->root;
         current->root = rootfs->root;
     }
+
+    // Create /ramfs and mount ramfs
+    vfs_mkdir("/ramfs");
+    vfs_mount("/ramfs", "ramfs");
 }
 
 int register_filesystem(struct filesystem* fs) {

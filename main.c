@@ -156,6 +156,27 @@ static void vfs_test() {
         printf("5. Mounted tmpfs at /mnt, '..' from /mnt correctly resolved to root\r\n");
     }
 
+    // 6. Testing /ramfs (Basic Exercise 4)
+    printf("6. Testing /ramfs (Basic Exercise 4)\r\n");
+    fd = sys_open("/ramfs/hello.txt", 0);
+    if (fd >= 0) {
+        memset(buf, 0, sizeof(buf));
+        sys_read(fd, buf, 12);
+        printf("   Read /ramfs/hello.txt: '%s'\r\n", buf);
+        sys_close(fd);
+    } else {
+        printf("   Could not open /ramfs/hello.txt (might not exist in cpio, but that's okay if lookup works)\r\n");
+    }
+
+    // Try to write to ramfs (should fail)
+    fd = sys_open("/ramfs/test_write", O_CREAT);
+    if (fd >= 0) {
+        printf("   Fail: Should not be able to create file in /ramfs\r\n");
+        sys_close(fd);
+    } else {
+        printf("   Success: Create file in /ramfs failed as expected\r\n");
+    }
+
     printf("--- VFS Exercise 3 Test End ---\r\n");
 }
 
@@ -350,6 +371,9 @@ void start_kernel(unsigned long hartid, const void *fdt) {
     // Video Init
     video_init();
 
+    kernel_hartid = hartid;
+    kernel_fdt = fdt;
+
     // VFS Init
     vfs_init();
 
@@ -357,9 +381,6 @@ void start_kernel(unsigned long hartid, const void *fdt) {
 
     // enable the UART interrupt when we check the above is inti and open
     uart_setup_interrupts();
-
-    kernel_hartid = hartid;
-    kernel_fdt = fdt;
 
     // Initialize thread mechanism and start testing
     init_thread_system(); // Creates idle thread as PID 0
