@@ -48,18 +48,20 @@ struct vnode_operations ramfs_vnode_ops = {
 
 struct vnode* ramfs_create_vnode(enum fsnode_type type, const char* name) {
     struct vnode* v = allocate(sizeof(struct vnode));
+    memset(v, 0, sizeof(struct vnode));
     v->mount = NULL;
     v->v_ops = &ramfs_vnode_ops;
     v->f_ops = &ramfs_file_ops;
+    v->parent = NULL;
 
     struct ramfs_inode* inode = allocate(sizeof(struct ramfs_inode));
+    memset(inode, 0, sizeof(struct ramfs_inode));
     inode->type = type;
-    strncpy(inode->name, name, RAMFS_MAX_FILE_NAME - 1);
-    inode->name[RAMFS_MAX_FILE_NAME - 1] = '\0';
+    if (name) {
+        strncpy(inode->name, name, RAMFS_MAX_FILE_NAME - 1);
+        inode->name[RAMFS_MAX_FILE_NAME - 1] = '\0';
+    }
     INIT_LIST_HEAD(&inode->entries);
-    INIT_LIST_HEAD(&inode->list);
-    inode->data = NULL;
-    inode->size = 0;
     inode->vnode = v;
 
     v->internal = inode;
@@ -149,6 +151,7 @@ int ramfs_setup_mount(struct filesystem* fs, struct mount* mnt) {
                 if (next_token != NULL || (mode & 040000)) {
                     // Directory
                     next = ramfs_create_vnode(FS_DIR, token);
+                    next->parent = curr;
                     struct ramfs_inode* curr_inode = curr->internal;
                     struct ramfs_dir_entry* entry = allocate(sizeof(struct ramfs_dir_entry));
                     entry->vnode = next;
@@ -157,6 +160,7 @@ int ramfs_setup_mount(struct filesystem* fs, struct mount* mnt) {
                 } else {
                     // File
                     next = ramfs_create_vnode(FS_FILE, token);
+                    next->parent = curr;
                     struct ramfs_inode* next_inode = next->internal;
                     next_inode->data = ptr + align_up(sizeof(struct cpio_t) + namesize, 4);
                     next_inode->size = filesize;

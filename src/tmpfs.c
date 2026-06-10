@@ -1,6 +1,6 @@
 #include "vfs.h"
 
-#define TMPFS_MAX_FILE_NAME 16
+#define TMPFS_MAX_FILE_NAME 32
 #define TMPFS_MAX_DIR_ENTRY 16
 #define TMPFS_MAX_FILE_SIZE 4096
 
@@ -37,16 +37,15 @@ struct vnode_operations tmpfs_vnode_ops = {
 
 struct vnode* tmpfs_create_vnode(enum fsnode_type type) {
     struct vnode* v = allocate(sizeof(struct vnode));
+    memset(v, 0, sizeof(struct vnode));
     v->mount = NULL;
     v->v_ops = &tmpfs_vnode_ops;
     v->f_ops = &tmpfs_file_ops;
+    v->parent = NULL;
 
     struct tmpfs_vnode* internal = allocate(sizeof(struct tmpfs_vnode));
+    memset(internal, 0, sizeof(struct tmpfs_vnode));
     internal->type = type;
-    memset(internal->name, 0, TMPFS_MAX_FILE_NAME);
-    memset(internal->entry, 0, sizeof(internal->entry));
-    internal->data = NULL;
-    internal->size = 0;
 
     v->internal = internal;
     return v;

@@ -30,6 +30,7 @@ struct vnode_operations devfs_vnode_ops = {
 
 struct vnode* devfs_create_vnode(const char* name) {
     struct vnode* v = (struct vnode*)allocate(sizeof(struct vnode));
+    memset(v, 0, sizeof(struct vnode));
     v->mount = NULL;
     v->v_ops = &devfs_vnode_ops;
     v->f_ops = &devfs_file_ops;

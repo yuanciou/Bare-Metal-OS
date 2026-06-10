@@ -11,30 +11,27 @@ struct filesystem fs_list[MAX_FS];
 
 void vfs_init() {
     struct filesystem* tmpfs = allocate(sizeof(struct filesystem));
+    memset(tmpfs, 0, sizeof(struct filesystem));
     tmpfs->name = "tmpfs";
     tmpfs->setup_mount = tmpfs_setup_mount;
     register_filesystem(tmpfs);
     
     struct filesystem* ramfs = allocate(sizeof(struct filesystem));
+    memset(ramfs, 0, sizeof(struct filesystem));
     ramfs->name = "ramfs";
     ramfs->setup_mount = ramfs_setup_mount;
     register_filesystem(ramfs);
 
     struct filesystem* devfs = allocate(sizeof(struct filesystem));
+    memset(devfs, 0, sizeof(struct filesystem));
     devfs->name = "devfs";
     devfs->setup_mount = devfs_setup_mount;
     register_filesystem(devfs);
 
     rootfs = allocate(sizeof(struct mount));
+    memset(rootfs, 0, sizeof(struct mount));
     tmpfs->setup_mount(tmpfs, rootfs);
     rootfs->root->parent = rootfs->root; // Root's parent is itself
-
-    // Set CWD for the initial thread
-    thread* current = get_cur_thread();
-    if (current) {
-        current->cwd = rootfs->root;
-        current->root = rootfs->root;
-    }
 
     // Create /ramfs and mount ramfs
     vfs_mkdir("/ramfs");
@@ -109,12 +106,14 @@ int vfs_open(const char* pathname, int flags, struct file** target) {
             if (dir_vnode->v_ops->create(dir_vnode, &vnode, filename) != 0) {
                 return -1;
             }
+            vnode->parent = dir_vnode;
         } else {
             return -1;
         }
     }
     
     *target = allocate(sizeof(struct file));
+    memset(*target, 0, sizeof(struct file));
     (*target)->vnode = vnode;
     (*target)->flags = flags;
     (*target)->f_pos = 0;
@@ -156,48 +155,58 @@ int vfs_ioctl(struct file* file, unsigned long request, void* arg) {
 }
 
 int vfs_lookup(const char* pathname, struct vnode** target) {
-    if (rootfs == NULL) return -1;
+    if (rootfs == NULL || pathname == NULL) return -1;
     
     struct vnode* node;
     int i = 0;
+    
+    // Handle Leading Slashes
     if (pathname[0] == '/') {
         node = rootfs->root;
-        i = 1;
+        while (pathname[i] == '/') i++;
     } else {
-        node = get_cur_thread()->cwd;
+        thread* cur = get_cur_thread();
+        node = (cur && cur->cwd) ? cur->cwd : rootfs->root;
     }
 
     char component[PATH_MAX];
     while (pathname[i] != '\0') {
-        int j = 0;
-        // Skip consecutive slashes
-        while (pathname[i] == '/') i++;
-        if (pathname[i] == '\0') break;
+        // Downward cross mount point
+        while (node->mount) {
+            node = node->mount->root;
+        }
 
+        // Parse next component
+        int j = 0;
         while (pathname[i] != '/' && pathname[i] != '\0') {
             component[j++] = pathname[i++];
         }
         component[j] = '\0';
         
         if (strcmp(component, ".") == 0) {
-            // Stay at current node
+            // Stay
         } else if (strcmp(component, "..") == 0) {
-            node = node->parent;
+            if (node->parent) {
+                node = node->parent;
+            }
         } else if (j > 0) {
             struct vnode* next_node;
             if (node->v_ops->lookup(node, &next_node, component) != 0) {
                 return -1;
             }
-            next_node->parent = node;
-            node = next_node;
-            
-            // Cross mount point
-            while (node->mount) {
-                struct vnode* old_node = node;
-                node = node->mount->root;
-                node->parent = old_node->parent; // Root of mounted FS parent is mount point's parent
+            if (next_node->parent == NULL && next_node != rootfs->root) {
+                next_node->parent = node;
             }
+            node = next_node;
         }
+
+        // Skip consecutive slashes
+        while (pathname[i] == '/') i++;
+    }
+
+    // Final downward cross
+    while (node && node->mount) {
+        node = node->mount->root;
     }
 
     *target = node;
@@ -215,7 +224,11 @@ int vfs_mkdir(const char* pathname) {
     }
     
     struct vnode* new_vnode;
-    return dir_vnode->v_ops->mkdir(dir_vnode, &new_vnode, filename);
+    int res = dir_vnode->v_ops->mkdir(dir_vnode, &new_vnode, filename);
+    if (res == 0) {
+        new_vnode->parent = dir_vnode;
+    }
+    return res;
 }
 
 int vfs_mount(const char* target, const char* filesystem) {
@@ -232,9 +245,16 @@ int vfs_mount(const char* target, const char* filesystem) {
     if (vfs_lookup(target, &mount_point) != 0) return -1;
 
     struct mount* mnt = allocate(sizeof(struct mount));
+    memset(mnt, 0, sizeof(struct mount));
     mnt->fs = fs;
     fs->setup_mount(fs, mnt);
-    mnt->root->parent = mount_point->parent;
+    
+    if (mount_point == rootfs->root) {
+        mnt->root->parent = mnt->root;
+    } else {
+        mnt->root->parent = mount_point->parent;
+    }
+    
     mount_point->mount = mnt;
     return 0;
 }
