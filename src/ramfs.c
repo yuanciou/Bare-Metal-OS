@@ -11,13 +11,13 @@
 enum fsnode_type { FS_DIR, FS_FILE };
 
 struct ramfs_inode {
-    enum fsnode_type type;
-    char name[RAMFS_MAX_FILE_NAME];
+    enum fsnode_type type;  // type of this node (dir or file)
+    char name[RAMFS_MAX_FILE_NAME];  // name of this node (file or directory name)
     struct list_head entries; // for directories, list of vnodes
-    struct list_head list;    // for directory entries, link to other vnodes
-    const char* data;
-    size_t size;
-    struct vnode* vnode;
+    struct list_head list;    // not use
+    const char* data;         // for files, pointer to the file content in initrd
+    size_t size;              // for files, size of the file content
+    struct vnode* vnode;      // pointer to the vnode corresponding to this inode (for easy access when lookup in ramfs)
 };
 
 struct ramfs_dir_entry {
@@ -46,6 +46,9 @@ struct vnode_operations ramfs_vnode_ops = {
     .mkdir = ramfs_mkdir
 };
 
+/**
+ * @brief Helper function to create a new vnode for ramfs with the given type (dir or file) and name. 
+ */
 struct vnode* ramfs_create_vnode(enum fsnode_type type, const char* name) {
     struct vnode* v = allocate(sizeof(struct vnode));
     memset(v, 0, sizeof(struct vnode));
@@ -107,17 +110,20 @@ int ramfs_setup_mount(struct filesystem* fs, struct mount* mnt) {
     extern const void* kernel_fdt;
     extern unsigned long get_initrd_start(const void *fdt);
     
+    // get start address of the initrd
     unsigned long initrd_start = get_initrd_start(kernel_fdt);
     if (initrd_start != 0 && initrd_start < PAGE_OFFSET) initrd_start += PAGE_OFFSET;
     
     if (initrd_start == 0) return -1;
 
+    // create root vnode for this mount
     struct vnode* root = ramfs_create_vnode(FS_DIR, "/");
     mnt->root = root;
     mnt->fs = fs;
 
     const char* ptr = (const char*)initrd_start;
     while (1) {
+        // same as before -> read CPIO header
         struct cpio_t* header = (struct cpio_t*)ptr;
         if (strncmp(header->magic, "070701", 6) != 0) break;
 
@@ -134,11 +140,13 @@ int ramfs_setup_mount(struct filesystem* fs, struct mount* mnt) {
             continue;
         }
 
+        // copy the file name in CPIO so that we can modify it (strtok will change the string)
         struct vnode* curr = root;
         char temp_name[256];
         strncpy(temp_name, name, 255);
         temp_name[255] = '\0';
 
+        // split the file path by strtok, the next token exist or not will determine if the current token is a directory or a file
         char* saveptr;
         char* token = strtok_r(temp_name, "/", &saveptr);
         while (token != NULL) {
@@ -146,6 +154,7 @@ int ramfs_setup_mount(struct filesystem* fs, struct mount* mnt) {
             struct vnode* next = NULL;
             
             if (ramfs_lookup(curr, &next, token) == 0) {
+                // already exist, just move to the next node
                 curr = next;
             } else {
                 if (next_token != NULL || (mode & 040000)) {

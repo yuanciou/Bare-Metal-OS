@@ -113,7 +113,7 @@ int devfs_write(struct file* file, const void* buf, size_t len) {
 
 long devfs_lseek64(struct file* file, long offset, int whence) {
     if (whence == 0) { // SEEK_SET
-        file->f_pos = offset;
+        file->f_pos = offset;  // directly set to offset
         return (long)file->f_pos;
     }
     return -1;
