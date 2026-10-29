@@ -112,6 +112,10 @@ int printf(const char *fmt, ...) {
                 case 'c':
                     uart_putc((char)__builtin_va_arg(args, int));
                     break;
+                case 'p':
+                    uart_puts("0x");
+                    print_long(__builtin_va_arg(args, unsigned long), 16, 0, ' ');
+                    break;
                 default:
                     uart_putc('%');
                     if (*p) uart_putc(*p);

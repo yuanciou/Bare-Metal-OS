@@ -2,6 +2,7 @@
 #define THREAD_H
 
 #include "exception.h"
+#include "vfs.h"
 
 #define KERNEL_STACK_SIZE 0x2000
 #define USER_STACK_SIZE 0x2000
@@ -63,6 +64,10 @@ typedef struct thread {
     struct pt_regs signal_saved_regs;   // saved register when handling interrupt
     unsigned long signal_stack_page;
     unsigned long signal_stack_vaddr;   // dynamic virtual address for the signal stack
+
+    struct vnode* cwd;
+    struct vnode* root;
+    struct file* fdt[16];
 } thread;
 
 void init_thread_system(void);
